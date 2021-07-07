@@ -303,7 +303,7 @@ fn apply_pat<L: Language, A: Analysis<L>>(
             ENodeOrVar::ENode(e) => {
                 let n = e.clone().map_children(|child| ids[usize::from(child)]);
                 trace!("adding: {:?}", n);
-                egraph.add(n, false)
+                egraph.add(n)
             }
         };
         ids[i] = id;
@@ -324,13 +324,13 @@ mod tests {
         crate::init_logger();
         let mut egraph = EGraph::default();
 
-        let x = egraph.add(S::leaf("x"), true);
-        let y = egraph.add(S::leaf("y"), true);
-        let plus = egraph.add(S::new("+", vec![x, y]), true);
+        let x = egraph.add(S::leaf("x"));
+        let y = egraph.add(S::leaf("y"));
+        let plus = egraph.add(S::new("+", vec![x, y]));
 
-        let z = egraph.add(S::leaf("z"), true);
-        let w = egraph.add(S::leaf("w"), true);
-        let plus2 = egraph.add(S::new("+", vec![z, w]), true);
+        let z = egraph.add(S::leaf("z"));
+        let w = egraph.add(S::leaf("w"));
+        let plus2 = egraph.add(S::new("+", vec![z, w]));
 
         egraph.union(plus, plus2);
         egraph.rebuild();
@@ -355,7 +355,7 @@ mod tests {
             println!("substs: {:?}", m);
         }
 
-        egraph.dot().to_dot("target/simple-match.dot").unwrap();
+        egraph.dot(&(|_x, _y| false)).to_dot("target/simple-match.dot").unwrap();
 
         use crate::extract::{AstSize, Extractor};
 
