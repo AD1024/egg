@@ -451,12 +451,12 @@ mod tests {
         crate::init_logger();
         let mut egraph = EGraph::default();
 
-        let x = egraph.add(S::leaf("x"));
-        let y = egraph.add(S::leaf("2"));
-        let mul = egraph.add(S::new("*", vec![x, y]));
+        let x = egraph.add(S::leaf("x"), true);
+        let y = egraph.add(S::leaf("2"), true);
+        let mul = egraph.add(S::new("*", vec![x, y]), true);
 
         let true_pat = Pattern::from_str("TRUE").unwrap();
-        let true_id = egraph.add(S::leaf("TRUE"));
+        let true_id = egraph.add(S::leaf("TRUE"), true);
 
         let pow2b = Pattern::from_str("(is-power2 ?b)").unwrap();
         let mul_to_shift = rewrite!(
@@ -471,7 +471,7 @@ mod tests {
         assert!(apps.is_empty());
 
         println!("Add the needed equality");
-        let two_ispow2 = egraph.add(S::new("is-power2", vec![y]));
+        let two_ispow2 = egraph.add(S::new("is-power2", vec![y]), true);
         egraph.union(two_ispow2, true_id);
 
         println!("Should fire now");
@@ -488,7 +488,7 @@ mod tests {
         let start = RecExpr::from_str("(+ x y)").unwrap();
         let goal = RecExpr::from_str("xy").unwrap();
 
-        let root = egraph.add_expr(&start);
+        let root = egraph.add_expr(&start, true);
 
         fn get(egraph: &EGraph, id: Id) -> Symbol {
             egraph[id].nodes[0].op
@@ -503,7 +503,7 @@ mod tests {
                 let a = get(&egraph, subst[a]);
                 let b = get(&egraph, subst[b]);
                 let s = format!("{}{}", a, b);
-                vec![egraph.add(S::leaf(&s))]
+                vec![egraph.add(S::leaf(&s), true)]
             }
         }
 

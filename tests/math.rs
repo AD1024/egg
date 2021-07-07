@@ -83,7 +83,7 @@ impl Analysis<Math> for ConstantFold {
     fn modify(egraph: &mut EGraph, id: Id) {
         let class = &mut egraph[id];
         if let Some(c) = class.data {
-            let added = egraph.add(Math::Constant(c));
+            let added = egraph.add(Math::Constant(c), false);
             let (id, _did_something) = egraph.union(id, added);
             // to not prune, comment this out
             egraph[id].nodes.retain(|n| n.is_leaf());

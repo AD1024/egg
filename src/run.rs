@@ -349,7 +349,7 @@ where
     /// [`roots`](Runner::roots) field, ordered by
     /// insertion order.
     pub fn with_expr(mut self, expr: &RecExpr<L>) -> Self {
-        let id = self.egraph.add_expr(expr);
+        let id = self.egraph.add_expr(expr, false);
         self.roots.push(id);
         self
     }

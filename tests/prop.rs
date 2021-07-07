@@ -39,7 +39,7 @@ impl Analysis<Prop> for ConstantFold {
     fn modify(egraph: &mut EGraph, id: Id) {
         println!("Modifying {}", id);
         if let Some(c) = egraph[id].data {
-            let const_id = egraph.add(Prop::Bool(c));
+            let const_id = egraph.add(Prop::Bool(c), false);
             egraph.union(id, const_id);
         }
     }
@@ -147,7 +147,7 @@ fn const_fold() {
     let end = "false";
     let end_expr = end.parse().unwrap();
     let mut eg = EGraph::default();
-    eg.add_expr(&start_expr);
+    eg.add_expr(&start_expr, true);
     eg.rebuild();
     assert!(!eg.equivs(&start_expr, &end_expr).is_empty());
 }

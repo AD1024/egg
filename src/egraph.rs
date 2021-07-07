@@ -52,6 +52,7 @@ pub struct EGraph<L: Language, N: Analysis<L>> {
     memo: HashMap<L, Id>,
     unionfind: UnionFind,
     classes: HashMap<Id, EClass<L, N::Data>>,
+    original_tag: HashMap<Id, Vec<L>>,
     pub(crate) classes_by_op: HashMap<std::mem::Discriminant<L>, HashSet<Id>>,
 }
 
@@ -82,6 +83,7 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
             pending: Default::default(),
             analysis_pending: Default::default(),
             classes_by_op: Default::default(),
+            original_tag: Default::default()
         }
     }
 
@@ -212,12 +214,12 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
     /// ```
     ///
     /// [`add_expr`]: EGraph::add_expr()
-    pub fn add_expr(&mut self, expr: &RecExpr<L>) -> Id {
+    pub fn add_expr(&mut self, expr: &RecExpr<L>, tag_original: bool) -> Id {
         let nodes = expr.as_ref();
         let mut new_ids = Vec::with_capacity(nodes.len());
         for node in nodes {
             let node = node.clone().map_children(|i| new_ids[usize::from(i)]);
-            new_ids.push(self.add(node))
+            new_ids.push(self.add(node, tag_original))
         }
         *new_ids.last().unwrap()
     }
@@ -269,6 +271,11 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         Some(*new_ids.last().unwrap())
     }
 
+    /// Given an eclass id, get the expressions that are added manually to EGraph
+    pub fn get_original_expr(&self, id: Id) -> Option<&Vec<L>> {
+        return self.original_tag.get(&id);
+    }
+
     /// Adds an enode to the [`EGraph`].
     ///
     /// When adding an enode, to the egraph, [`add`] it performs
@@ -282,7 +289,7 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
     /// so you must call [`rebuild`](EGraph::rebuild) any query operations.
     ///
     /// [`add`]: EGraph::add()
-    pub fn add(&mut self, mut enode: L) -> Id {
+    pub fn add(&mut self, mut enode: L, tag_original: bool) -> Id {
         self.lookup(&mut enode).unwrap_or_else(|| {
             let id = self.unionfind.make_set();
             log::trace!("  ...adding to {}", id);
@@ -303,6 +310,16 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
             self.pending.push((enode.clone(), id));
 
             self.classes.insert(id, class);
+            if tag_original {
+                if let Some(tags) = self.original_tag.get_mut(&id) {
+                    tags.push(enode.clone());
+                } else {
+                    let mut tags : Vec<L> = Vec::new();
+                    tags.push(enode.clone());
+                    self.original_tag.insert(id, tags);
+                }
+            }
+
             assert!(self.memo.insert(enode, id).is_none());
 
             N::modify(self, id);
@@ -645,11 +662,11 @@ mod tests {
         crate::init_logger();
         let mut egraph = EGraph::<S, ()>::default();
 
-        let x = egraph.add(S::leaf("x"));
-        let x2 = egraph.add(S::leaf("x"));
-        let _plus = egraph.add(S::new("+", vec![x, x2]));
+        let x = egraph.add(S::leaf("x"), true);
+        let x2 = egraph.add(S::leaf("x"), true);
+        let _plus = egraph.add(S::new("+", vec![x, x2]), true);
 
-        let y = egraph.add(S::leaf("y"));
+        let y = egraph.add(S::leaf("y"), true);
 
         egraph.union(x, y);
         egraph.rebuild();
