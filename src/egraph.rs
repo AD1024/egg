@@ -298,14 +298,20 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         if let Some(eclass) = self.classes.get(&id) {
             if let Some(result) = self.get_class_data(id) {
                 if func(&result) {
+                    // println!("{:?} found at eclass {}", result, id);
                     return Some((result, rw.clone()))
                 } else {
                     let parents = &eclass.parents;
                     if parents.len() == 0 {
+                        // println!("No parent for eclass {}", id);
                         return None
                     } else {
                         for enode in parents.iter() {
-                            if let Some(result) = self.find_nearest_expr(&enode.1, Some(enode.0.clone()), func) {
+                            // println!("Searching for parent enode {:?}", enode);
+                            let mut enode = enode.clone();
+                            enode.0.update_children(|id| self.find(id));
+                            if let Some(result) = self.find_nearest_expr(&self.find(enode.1), Some(enode.0.clone()), func) {
+                                // println!("{:?} success", enode);
                                 return Some(result)
                             }
                         }
@@ -313,8 +319,10 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
                     }
                 }
             }
+            // println!("No original expr found");
             return None
         }
+        // println!("No eclass {} found", id);
         return None
     }
 

@@ -9,11 +9,13 @@ type MatchPat = Pattern<TestLang>;
 
 define_language! {
     pub enum TestLang {
+        "relu"     = ReLu([Id; 1]),
         "bias_add" = BiasAdd([Id; 2]),
         "dense"    = Dense([Id; 2]),
         "add"      = Add([Id; 2]),
         "reshape"  = Reshape([Id; 2]),
         "shape"    = Shape(Box<[Id]>),
+        "flex-linear" = FlexLinear([Id; 3]),
         Usize(usize),
         Symbol(String),
     }
@@ -63,21 +65,34 @@ fn rewrites() -> Vec<egg::Rewrite<TestLang, TestLangAnalysis>> {
     ]
 }
 
+fn patterns() -> Vec<egg::Rewrite<TestLang, TestLangAnalysis>> {
+    vec! [
+        rewrite!("linear-layer"; "(bias_add (dense ?x ?w) ?b)" => "(flex-linear ?x ?w ?b)")
+    ]
+}
+
 #[test]
 fn linear_rewrite() {
-    let expr : Expr = "(add (reshape (dense x w) (shape 1 4 4)) b)".parse().unwrap();
-    let pattern : MatchPat = "(bias_add (dense ?x ?w) ?b)".parse().unwrap();
+    let expr : Expr = "(add 
+        (reshape
+            (dense 
+                (relu (add (reshape (dense x w) (shape 1 4 4)) b))
+                w2)
+            (shape 1 32 32)) b2)".parse().unwrap();
+    // let pattern : MatchPat = "(bias_add (dense ?x ?w) ?b)".parse().unwrap();
     let mut egraph = EG::new(TestLangAnalysis {});
     egraph.toggle_tag_original(true);
     egraph.add_expr(&expr);
     egraph.toggle_tag_original(false);
-    let rws = rewrites();
+    egraph.rebuild();
+    let mut rws = rewrites();
+    rws.extend(patterns());
     let runner = Runner::<_, _, ()>::new(TestLangAnalysis {}).with_egraph(egraph).run(&rws);
     println!("Matches:");
-    let matches =  pattern.search(&runner.egraph);
     runner.egraph.dot(&validation_fn).to_svg("/mnt/e/Junior/egg/viz.svg").unwrap();
-    for eclass in matches.iter().map(|x| x.eclass) {
-        println!("Searching for eclass {}", eclass);
-        println!("{:?}", runner.egraph.find_nearest_expr(&eclass, None, &Box::new(validate_data)));
-    }
+    // let matches =  pattern.search(&runner.egraph);
+    // for eclass in matches.iter().map(|x| x.eclass) {
+    //     println!("Searching for eclass {}", eclass);
+    //     println!("{:?}", runner.egraph.find_nearest_expr(&eclass, None, &Box::new(validate_data)));
+    // }
 }
