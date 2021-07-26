@@ -231,13 +231,14 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         let nodes = expr.as_ref();
         let mut new_ids = Vec::with_capacity(nodes.len());
         let mut id_map: HashMap<Id, Id> = HashMap::default();
-        for node in nodes {
+        for (node_id, node) in nodes.iter().enumerate() {
             let node = node.clone().map_children(|i| {
                 let result = new_ids[usize::from(i)];
                 id_map.insert(i, result);
                 result
             });
             new_ids.push(self.add(node));
+            id_map.insert(Id::from(node_id), *new_ids.last().unwrap());
         }
         (*new_ids.last().unwrap(), id_map)
     }
