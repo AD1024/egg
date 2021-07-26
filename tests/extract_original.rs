@@ -71,20 +71,29 @@ fn patterns() -> Vec<egg::Rewrite<TestLang, TestLangAnalysis>> {
     ]
 }
 
-#[test]
-fn linear_rewrite() {
-    let expr : Expr = "(add 
+fn linear_layer() -> RecExpr<TestLang> {
+    "(add (reshape (dense x w) (shape 1 4 4)) b)".parse().unwrap()
+}
+
+fn stacked_linear() -> RecExpr<TestLang> {
+    "(add 
         (reshape
             (dense 
                 (relu (add (reshape (dense x w) (shape 1 4 4)) b))
                 w2)
-            (shape 1 32 32)) b2)".parse().unwrap();
+            (shape 1 32 32)) b2)".parse().unwrap()
+}
+
+#[test]
+fn linear_rewrite() {
+    let expr : Expr = stacked_linear();
     // let pattern : MatchPat = "(bias_add (dense ?x ?w) ?b)".parse().unwrap();
     let mut egraph = EG::new(TestLangAnalysis {});
     egraph.toggle_tag_original(true);
     egraph.add_expr(&expr);
     egraph.toggle_tag_original(false);
     egraph.rebuild();
+    egraph.dot(&validation_fn).to_svg("/mnt/e/Junior/egg/model.svg").unwrap();
     let mut rws = rewrites();
     rws.extend(patterns());
     let runner = Runner::<_, _, ()>::new(TestLangAnalysis {}).with_egraph(egraph).run(&rws);

@@ -225,6 +225,23 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         *new_ids.last().unwrap()
     }
 
+    /// Do similar things as `add_expr` but will record the eclass Id mappings
+    /// when adding exprs to the egraph
+    pub fn add_expr_with_record(&mut self, expr: &RecExpr<L>) -> (Id, HashMap<Id, Id>) {
+        let nodes = expr.as_ref();
+        let mut new_ids = Vec::with_capacity(nodes.len());
+        let mut id_map: HashMap<Id, Id> = HashMap::default();
+        for node in nodes {
+            let node = node.clone().map_children(|i| {
+                let result = new_ids[usize::from(i)];
+                id_map.insert(i, result);
+                result
+            });
+            new_ids.push(self.add(node));
+        }
+        (*new_ids.last().unwrap(), id_map)
+    }
+
     /// Lookup the eclass of the given enode.
     ///
     /// You can pass in either an owned enode or a `&mut` enode,

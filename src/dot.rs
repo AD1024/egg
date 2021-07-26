@@ -57,6 +57,7 @@ pub struct Dot<'a, L: Language, N: Analysis<L>, F: Fn(&L, &N::Data) -> bool> {
     /// Whether or not to anchor the edges in the output.
     /// True by default.
     pub use_anchors: bool,
+    /// Tagging function
     pub validation_func: Box<F>
 }
 
@@ -66,6 +67,7 @@ where
     N: Analysis<L>,
     F: Fn(&L, &N::Data) -> bool
 {
+    /// Wrapper for validation_func
     pub fn validate(&self, enode: &L, data: &N::Data) -> bool {
         (self.validation_func)(enode, data)
     }
