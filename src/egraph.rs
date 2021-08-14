@@ -1,4 +1,5 @@
 use crate::*;
+use crate::record::RecordConstructor;
 use std::{
     borrow::BorrowMut,
     cmp::Ordering,
@@ -464,6 +465,12 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
 
         N::modify(self, id1);
         (id1, id1 != id2)
+    }
+
+    /// Convert the EGraph to a sequence of instructions
+    /// for rebuilding the EGraph
+    pub fn record(&self) -> RecordConstructor<L, N> {
+        RecordConstructor { egraph: self }
     }
 
     /// Returns a more debug-able representation of the egraph.

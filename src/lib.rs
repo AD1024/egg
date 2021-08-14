@@ -42,6 +42,7 @@ mod run;
 mod subst;
 mod unionfind;
 mod util;
+mod record;
 
 /// A key to identify [`EClass`]es within an
 /// [`EGraph`].

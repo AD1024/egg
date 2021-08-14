@@ -99,6 +99,7 @@ fn linear_rewrite() {
     let runner = Runner::<_, _, ()>::new(TestLangAnalysis {}).with_egraph(egraph).run(&rws);
     println!("Matches:");
     runner.egraph.dot(&validation_fn).to_svg("/mnt/e/Junior/egg/viz.svg").unwrap();
+    println!("{}", runner.egraph.record().to_record_instructions());
     // let matches =  pattern.search(&runner.egraph);
     // for eclass in matches.iter().map(|x| x.eclass) {
     //     println!("Searching for eclass {}", eclass);
