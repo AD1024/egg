@@ -90,7 +90,7 @@ fn linear_rewrite() {
     // let pattern : MatchPat = "(bias_add (dense ?x ?w) ?b)".parse().unwrap();
     let mut egraph = EG::new(TestLangAnalysis {});
     egraph.toggle_tag_original(true);
-    egraph.add_expr(&expr);
+    let id = egraph.add_expr(&expr);
     egraph.toggle_tag_original(false);
     egraph.rebuild();
     egraph.dot(&validation_fn).to_svg("/mnt/e/Junior/egg/model.svg").unwrap();
@@ -99,7 +99,7 @@ fn linear_rewrite() {
     let runner = Runner::<_, _, ()>::new(TestLangAnalysis {}).with_egraph(egraph).run(&rws);
     println!("Matches:");
     runner.egraph.dot(&validation_fn).to_svg("/mnt/e/Junior/egg/viz.svg").unwrap();
-    println!("{}", runner.egraph.record().to_record_instructions());
+    println!("{}", runner.egraph.record().to_record_instructions(id));
     // let matches =  pattern.search(&runner.egraph);
     // for eclass in matches.iter().map(|x| x.eclass) {
     //     println!("Searching for eclass {}", eclass);
