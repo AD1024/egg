@@ -12,6 +12,7 @@ use crate::*;
 use fmt::Formatter;
 use symbolic_expressions::{Sexp, SexpError};
 use thiserror::Error;
+use serde_json::{Value, json};
 
 /// Trait that defines a Language whose terms will be in the [`EGraph`].
 ///
@@ -214,6 +215,12 @@ impl FromOpError {
     }
 }
 
+/// Serialization to Json format data
+pub trait JsonSerialize {
+    #[cfg(feature = "reports")]
+    fn serialize(&self) -> Value;
+}
+
 /// A marker that defines acceptable children types for [`define_language!`].
 ///
 /// See [`define_language!`] for more details.
@@ -380,6 +387,17 @@ impl<L: Language + Display> RecExpr<L> {
             node.for_each(|id| vec.push(self.to_sexp(id.into())));
             Sexp::List(vec)
         }
+    }
+
+    pub fn serialize(&self) -> Value {
+        let mut nodes = Vec::new();
+        for (id, node) in self.nodes.iter().enumerate() {
+            nodes.push((id, node.to_string(), node.children().to_vec()
+                                                  .clone().iter()
+                                                  .map(|x| usize::from(*x))
+                                                  .collect::<Vec<_>>()));
+        }
+        json!(nodes)
     }
 
     /// Pretty print with a maximum line length.
