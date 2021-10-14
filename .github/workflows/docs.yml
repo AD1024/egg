@@ -11,7 +11,9 @@ jobs:
       with:
         persist-credentials: false
     - name: Build Docs
-      run: cargo doc --no-deps
+      run: | 
+        cargo doc --no-deps --all-features
+        touch target/doc/.nojekyll # prevent jekyll from running
     - name: Deploy 🚀
       uses: JamesIves/github-pages-deploy-action@3.7.1
       with:
