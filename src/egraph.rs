@@ -1,4 +1,5 @@
 use crate::*;
+use crate::record::RecordConstructor;
 use std::{
     borrow::BorrowMut,
     cmp::Ordering,
@@ -52,6 +53,7 @@ pub struct EGraph<L: Language, N: Analysis<L>> {
     memo: HashMap<L, Id>,
     unionfind: UnionFind,
     classes: HashMap<Id, EClass<L, N::Data>>,
+    tag_original: bool,
     pub(crate) classes_by_op: HashMap<std::mem::Discriminant<L>, HashSet<Id>>,
 }
 
@@ -82,6 +84,7 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
             pending: Default::default(),
             analysis_pending: Default::default(),
             classes_by_op: Default::default(),
+            tag_original: false
         }
     }
 
@@ -166,11 +169,12 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
 
     /// Creates a [`Dot`] to visualize this egraph. See [`Dot`].
     ///
-    pub fn dot(&self) -> Dot<L, N> {
+    pub fn dot(&self, func: &'static impl Fn(&L, &N::Data) -> bool) -> Dot<L, N, impl Fn(&L, &N::Data) -> bool> {
         Dot {
             egraph: self,
             config: vec![],
             use_anchors: true,
+            validation_func: Box::new(func)
         }
     }
 }
@@ -217,9 +221,27 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         let mut new_ids = Vec::with_capacity(nodes.len());
         for node in nodes {
             let node = node.clone().map_children(|i| new_ids[usize::from(i)]);
-            new_ids.push(self.add(node))
+            new_ids.push(self.add(node));
         }
         *new_ids.last().unwrap()
+    }
+
+    /// Do similar things as `add_expr` but will record the eclass Id mappings
+    /// when adding exprs to the egraph
+    pub fn add_expr_with_record(&mut self, expr: &RecExpr<L>) -> (Id, HashMap<Id, Id>) {
+        let nodes = expr.as_ref();
+        let mut new_ids = Vec::with_capacity(nodes.len());
+        let mut id_map: HashMap<Id, Id> = HashMap::default();
+        for (node_id, node) in nodes.iter().enumerate() {
+            let node = node.clone().map_children(|i| {
+                let result = new_ids[usize::from(i)];
+                id_map.insert(i, result);
+                result
+            });
+            new_ids.push(self.add(node));
+            id_map.insert(Id::from(node_id), *new_ids.last().unwrap());
+        }
+        (*new_ids.last().unwrap(), id_map)
     }
 
     /// Lookup the eclass of the given enode.
@@ -269,6 +291,60 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         Some(*new_ids.last().unwrap())
     }
 
+    /// Given an eclass id, get the analysis data
+    pub fn get_class_data(&self, id: &Id) -> Option<&N::Data> {
+        match self.classes.get(id) {
+            Some(eclass) => {
+                Some(&eclass.data)
+            },
+            _ => None
+        }
+    }
+
+    /// Enable tagging
+    pub fn toggle_tag_original(&mut self, switch: bool) {
+        self.tag_original = switch
+    }
+
+    /// Returns true iff currently is in tagging mode
+    pub fn tagging(&self) -> bool {
+        return self.tag_original
+    }
+
+    /// Given an eclass, get the nearest expressions that appear in the original expression
+    /// and is equivalent to the expression that contains the pattern expression after rewrites 
+    pub fn find_nearest_expr(&self, id: &Id, rw: Option<L>, func: &Box<impl Fn(&N::Data) -> bool>) -> Option<(&N::Data, Option<L>)> {
+        if let Some(eclass) = self.classes.get(&id) {
+            if let Some(result) = self.get_class_data(id) {
+                if func(&result) {
+                    // println!("{:?} found at eclass {}", result, id);
+                    return Some((result, rw.clone()))
+                } else {
+                    let parents = &eclass.parents;
+                    if parents.len() == 0 {
+                        // println!("No parent for eclass {}", id);
+                        return None
+                    } else {
+                        for enode in parents.iter() {
+                            // println!("Searching for parent enode {:?}", enode);
+                            let mut enode = enode.clone();
+                            enode.0.update_children(|id| self.find(id));
+                            if let Some(result) = self.find_nearest_expr(&self.find(enode.1), Some(enode.0.clone()), func) {
+                                // println!("{:?} success", enode);
+                                return Some(result)
+                            }
+                        }
+                        return None
+                    }
+                }
+            }
+            // println!("No original expr found");
+            return None
+        }
+        // println!("No eclass {} found", id);
+        return None
+    }
+
     /// Adds an enode to the [`EGraph`].
     ///
     /// When adding an enode, to the egraph, [`add`] it performs
@@ -303,6 +379,7 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
             self.pending.push((enode.clone(), id));
 
             self.classes.insert(id, class);
+
             assert!(self.memo.insert(enode, id).is_none());
 
             N::modify(self, id);
@@ -388,6 +465,12 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
 
         N::modify(self, id1);
         (id1, id1 != id2)
+    }
+
+    /// Convert the EGraph to a sequence of instructions
+    /// for rebuilding the EGraph
+    pub fn record(&self) -> RecordConstructor<L, N> {
+        RecordConstructor { egraph: self }
     }
 
     /// Returns a more debug-able representation of the egraph.
@@ -654,6 +737,6 @@ mod tests {
         egraph.union(x, y);
         egraph.rebuild();
 
-        egraph.dot().to_dot("target/foo.dot").unwrap();
+        egraph.dot(&(|_x, _y| false)).to_dot("target/foo.dot").unwrap();
     }
 }

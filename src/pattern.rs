@@ -355,7 +355,7 @@ mod tests {
             println!("substs: {:?}", m);
         }
 
-        egraph.dot().to_dot("target/simple-match.dot").unwrap();
+        egraph.dot(&(|_x, _y| false)).to_dot("target/simple-match.dot").unwrap();
 
         use crate::extract::{AstSize, Extractor};
 

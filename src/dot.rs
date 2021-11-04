@@ -50,20 +50,27 @@ instead of to its own eclass.
 
 [GraphViz]: https://graphviz.gitlab.io/
 **/
-pub struct Dot<'a, L: Language, N: Analysis<L>> {
+pub struct Dot<'a, L: Language, N: Analysis<L>, F: Fn(&L, &N::Data) -> bool> {
     pub(crate) egraph: &'a EGraph<L, N>,
     /// A list of strings to be output top part of the dot file.
     pub config: Vec<String>,
     /// Whether or not to anchor the edges in the output.
     /// True by default.
     pub use_anchors: bool,
+    /// Tagging function
+    pub validation_func: Box<F>
 }
 
-impl<'a, L, N> Dot<'a, L, N>
+impl<'a, L, N, F> Dot<'a, L, N, F>
 where
     L: Language + Display,
     N: Analysis<L>,
+    F: Fn(&L, &N::Data) -> bool
 {
+    /// Wrapper for validation_func
+    pub fn validate(&self, enode: &L, data: &N::Data) -> bool {
+        (self.validation_func)(enode, data)
+    }
     /// Writes the `Dot` to a .dot file with the given filename.
     /// Does _not_ require a `dot` binary.
     pub fn to_dot(&self, filename: impl AsRef<Path>) -> Result<()> {
@@ -170,16 +177,17 @@ where
     }
 }
 
-impl<'a, L: Language, N: Analysis<L>> Debug for Dot<'a, L, N> {
+impl<'a, L: Language, N: Analysis<L>, F: Fn(&L, &N::Data) -> bool> Debug for Dot<'a, L, N, F> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_tuple("Dot").field(self.egraph).finish()
     }
 }
 
-impl<'a, L, N> Display for Dot<'a, L, N>
+impl<'a, L, N, F> Display for Dot<'a, L, N, F>
 where
     L: Language + Display,
     N: Analysis<L>,
+    F: Fn(&L, &N::Data) -> bool,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         writeln!(f, "digraph egraph {{")?;
@@ -197,7 +205,10 @@ where
             writeln!(f, "  subgraph cluster_{} {{", class.id)?;
             writeln!(f, "    style=dotted")?;
             for (i, node) in class.iter().enumerate() {
-                writeln!(f, "    {}.{}[label = \"{}\"]", class.id, i, node)?;
+                match self.egraph.get_class_data(&class.id) {
+                    Some(exprs) => writeln!(f, "    {}.{}[label = \"{}({})\"]", class.id, i, node, self.validate(&node, &exprs))?,
+                    None        => writeln!(f, "    {}.{}[label = \"{}\"]", class.id, i, node)?
+                }
             }
             writeln!(f, "  }}")?;
         }
