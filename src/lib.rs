@@ -39,12 +39,12 @@ mod language;
 mod lp_extract;
 mod machine;
 mod pattern;
+mod record;
 mod rewrite;
 mod run;
 mod subst;
 mod unionfind;
 mod util;
-mod record;
 
 /// A key to identify [`EClass`]es within an
 /// [`EGraph`].

@@ -58,14 +58,14 @@ pub struct Dot<'a, L: Language, N: Analysis<L>, F: Fn(&L, &N::Data) -> bool> {
     /// True by default.
     pub use_anchors: bool,
     /// Tagging function
-    pub validation_func: Box<F>
+    pub validation_func: Box<F>,
 }
 
 impl<'a, L, N, F> Dot<'a, L, N, F>
 where
     L: Language + Display,
     N: Analysis<L>,
-    F: Fn(&L, &N::Data) -> bool
+    F: Fn(&L, &N::Data) -> bool,
 {
     /// Wrapper for validation_func
     pub fn validate(&self, enode: &L, data: &N::Data) -> bool {
@@ -206,8 +206,15 @@ where
             writeln!(f, "    style=dotted")?;
             for (i, node) in class.iter().enumerate() {
                 match self.egraph.get_class_data(&class.id) {
-                    Some(exprs) => writeln!(f, "    {}.{}[label = \"{}({})\"]", class.id, i, node, self.validate(&node, &exprs))?,
-                    None        => writeln!(f, "    {}.{}[label = \"{}\"]", class.id, i, node)?
+                    Some(exprs) => writeln!(
+                        f,
+                        "    {}.{}[label = \"{}({})\"]",
+                        class.id,
+                        i,
+                        node,
+                        self.validate(&node, &exprs)
+                    )?,
+                    None => writeln!(f, "    {}.{}[label = \"{}\"]", class.id, i, node)?,
                 }
             }
             writeln!(f, "  }}")?;

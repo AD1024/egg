@@ -42,7 +42,7 @@ struct TestLangAnalysis;
 impl Analysis<TestLang> for TestLangAnalysis {
     type Data = HashSet<TestLang>;
     fn make(egraph: &EGraph<TestLang, Self>, enode: &TestLang) -> Self::Data {
-        let mut original_exprs : HashSet<TestLang> = Default::default();
+        let mut original_exprs: HashSet<TestLang> = Default::default();
         if egraph.tagging() {
             original_exprs.insert(enode.clone());
         }
@@ -61,34 +61,36 @@ fn validation_fn(x: &TestLang, data: &HashSet<TestLang>) -> bool {
 fn validate_data(x: &HashSet<TestLang>) -> bool {
     x.len() > 0
 }
- 
+
 fn rewrites() -> Vec<egg::Rewrite<TestLang, TestLangAnalysis>> {
-    fn is_shape(s : Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    fn is_shape(s: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
         move |egraph, _, subst| {
-            egraph[subst[s]].nodes.iter().map(|enode| match enode {
-                TestLang::Shape(_) => true,
-                _ => false
-            }).all(|x| x)
+            egraph[subst[s]]
+                .nodes
+                .iter()
+                .map(|enode| match enode {
+                    TestLang::Shape(_) => true,
+                    _ => false,
+                })
+                .all(|x| x)
         }
     }
-    vec! [
-        rewrite!("bubble-reshape"; "(add 
+    vec![rewrite!("bubble-reshape"; "(add 
                                     (reshape 
                                         (dense ?x ?w) 
                                         ?s) ?b)"
                                 =>
-                               "(reshape (bias_add (dense ?x ?w) ?b) ?s)" if is_shape("?s".parse().unwrap()))
-    ]
+                               "(reshape (bias_add (dense ?x ?w) ?b) ?s)" if is_shape("?s".parse().unwrap()))]
 }
 
 fn patterns() -> Vec<egg::Rewrite<TestLang, TestLangAnalysis>> {
-    vec! [
-        rewrite!("linear-layer"; "(bias_add (dense ?x ?w) ?b)" => "(flex-linear ?x ?w ?b)")
-    ]
+    vec![rewrite!("linear-layer"; "(bias_add (dense ?x ?w) ?b)" => "(flex-linear ?x ?w ?b)")]
 }
 
 fn linear_layer() -> RecExpr<TestLang> {
-    "(add (reshape (dense x w) (shape 1 4 4)) b)".parse().unwrap()
+    "(add (reshape (dense x w) (shape 1 4 4)) b)"
+        .parse()
+        .unwrap()
 }
 
 fn stacked_linear() -> RecExpr<TestLang> {
@@ -97,34 +99,55 @@ fn stacked_linear() -> RecExpr<TestLang> {
             (dense 
                 (relu (add (reshape (dense x w) (shape 1 4 4)) b))
                 w)
-            (shape 1 32 32)) b)".parse().unwrap()
+            (shape 1 32 32)) b)"
+        .parse()
+        .unwrap()
 }
 
 #[cfg(feature = "serde-json")]
-pub fn dump_expr(expr : Expr) {
+pub fn dump_expr(expr: Expr) {
     println!("{}", expr.serialize().to_string());
 }
 
 #[test]
 fn linear_rewrite() {
-    let expr : Expr = linear_layer();
+    let expr: Expr = linear_layer();
     let result = expr.serialize().to_string();
     println!("Result:");
     println!("result json: {}", result);
-    let _ = fs::write(PathBuf::from(format!("{}/json_dump.json", env!("CARGO_MANIFEST_DIR"))), result).unwrap();
+    let _ = fs::write(
+        PathBuf::from(format!("{}/json_dump.json", env!("CARGO_MANIFEST_DIR"))),
+        result,
+    )
+    .unwrap();
     // let pattern : MatchPat = "(bias_add (dense ?x ?w) ?b)".parse().unwrap();
     let mut egraph = EG::new(TestLangAnalysis {});
     egraph.toggle_tag_original(true);
     let id = egraph.add_expr(&expr);
     egraph.toggle_tag_original(false);
     egraph.rebuild();
-    egraph.dot(&validation_fn).to_svg("/mnt/e/Junior/egg/model.svg").unwrap();
+    egraph
+        .dot(&validation_fn)
+        .to_svg("/mnt/e/Junior/egg/model.svg")
+        .unwrap();
     let mut rws = rewrites();
     rws.extend(patterns());
-    let runner = Runner::<_, _, ()>::new(TestLangAnalysis {}).with_egraph(egraph).run(&rws);
+    let runner = Runner::<_, _, ()>::new(TestLangAnalysis {})
+        .with_egraph(egraph)
+        .run(&rws);
     println!("Matches:");
-    runner.egraph.dot(&validation_fn).to_svg("/mnt/e/Junior/egg/viz.svg").unwrap();
-    println!("{}", runner.egraph.record().to_record_instructions(runner.egraph.find(id)));
+    runner
+        .egraph
+        .dot(&validation_fn)
+        .to_svg("/mnt/e/Junior/egg/viz.svg")
+        .unwrap();
+    println!(
+        "{}",
+        runner
+            .egraph
+            .record()
+            .to_record_instructions(runner.egraph.find(id))
+    );
     // let matches =  pattern.search(&runner.egraph);
     // for eclass in matches.iter().map(|x| x.eclass) {
     //     println!("Searching for eclass {}", eclass);

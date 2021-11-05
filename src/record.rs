@@ -1,8 +1,8 @@
-use crate::{EGraph, Language, Analysis, Id};
+use crate::{Analysis, EGraph, Id, Language};
 use std::fmt::Display;
 
 pub struct RecordConstructor<'a, L: Language, N: Analysis<L>> {
-    pub(crate) egraph: &'a EGraph<L, N>
+    pub(crate) egraph: &'a EGraph<L, N>,
 }
 
 impl<'a, L: Language + Display, N: Analysis<L>> RecordConstructor<'a, L, N> {
@@ -29,7 +29,7 @@ impl<'a, L: Language + Display, N: Analysis<L>> RecordConstructor<'a, L, N> {
         self.set_symbol(s, node.to_string());
         if node.children().len() > 0 {
             s.push_str("BEGIN_CHILDREN ");
-            node.for_each(|ch| { s.push_str(&format!("{} ", ch)[..]) });
+            node.for_each(|ch| s.push_str(&format!("{} ", ch)[..]));
             s.push_str("\nEND_CHILDREN\n");
         }
         s.push_str("END_ENODE\n");
@@ -39,14 +39,14 @@ impl<'a, L: Language + Display, N: Analysis<L>> RecordConstructor<'a, L, N> {
         s.push_str(&format!("{} {}\n", "ECLASS", id)[..]);
     }
 
-    fn end_eclass(&self, s : &mut String) {
+    fn end_eclass(&self, s: &mut String) {
         s.push_str(&format!("{}\n", "END_ECLASS")[..]);
     }
 
     fn set_root(&self, s: &mut String, root: Id) {
         s.push_str(&format!("ROOT {}\n", root));
     }
-    
+
     fn set_size(&self, s: &mut String, size: usize) {
         s.push_str(&format!("SIZE {}\n", size)[..]);
     }

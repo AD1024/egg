@@ -10,9 +10,9 @@ use std::{hash::Hash, str::FromStr};
 use crate::*;
 
 use fmt::Formatter;
+use serde_json::{json, Value};
 use symbolic_expressions::{Sexp, SexpError};
 use thiserror::Error;
-use serde_json::{Value, json};
 
 /// Trait that defines a Language whose terms will be in the [`EGraph`].
 ///
@@ -392,10 +392,16 @@ impl<L: Language + Display> RecExpr<L> {
     pub fn serialize(&self) -> Value {
         let mut nodes = Vec::new();
         for (id, node) in self.nodes.iter().enumerate() {
-            nodes.push((id, node.to_string(), node.children().to_vec()
-                                                  .clone().iter()
-                                                  .map(|x| usize::from(*x))
-                                                  .collect::<Vec<_>>()));
+            nodes.push((
+                id,
+                node.to_string(),
+                node.children()
+                    .to_vec()
+                    .clone()
+                    .iter()
+                    .map(|x| usize::from(*x))
+                    .collect::<Vec<_>>(),
+            ));
         }
         json!(nodes)
     }

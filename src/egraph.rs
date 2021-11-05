@@ -1,5 +1,5 @@
-use crate::*;
 use crate::record::RecordConstructor;
+use crate::*;
 use std::{
     borrow::BorrowMut,
     cmp::Ordering,
@@ -84,7 +84,7 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
             pending: Default::default(),
             analysis_pending: Default::default(),
             classes_by_op: Default::default(),
-            tag_original: false
+            tag_original: false,
         }
     }
 
@@ -169,12 +169,15 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
 
     /// Creates a [`Dot`] to visualize this egraph. See [`Dot`].
     ///
-    pub fn dot(&self, func: &'static impl Fn(&L, &N::Data) -> bool) -> Dot<L, N, impl Fn(&L, &N::Data) -> bool> {
+    pub fn dot(
+        &self,
+        func: &'static impl Fn(&L, &N::Data) -> bool,
+    ) -> Dot<L, N, impl Fn(&L, &N::Data) -> bool> {
         Dot {
             egraph: self,
             config: vec![],
             use_anchors: true,
-            validation_func: Box::new(func)
+            validation_func: Box::new(func),
         }
     }
 }
@@ -294,10 +297,8 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
     /// Given an eclass id, get the analysis data
     pub fn get_class_data(&self, id: &Id) -> Option<&N::Data> {
         match self.classes.get(id) {
-            Some(eclass) => {
-                Some(&eclass.data)
-            },
-            _ => None
+            Some(eclass) => Some(&eclass.data),
+            _ => None,
         }
     }
 
@@ -308,41 +309,67 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
 
     /// Returns true iff currently is in tagging mode
     pub fn tagging(&self) -> bool {
-        return self.tag_original
+        return self.tag_original;
+    }
+
+    /// Return a Vec of a pair of Vec<Id> and Id
+    /// meaning need to notify of eclasses having id in Vec<Id>
+    /// to update analysis data using the second Id.
+    pub fn analysis_update_worklist(
+        &self,
+        should_update_parents: impl Fn(&N::Data) -> bool,
+    ) -> Vec<(Vec<Id>, Id)> {
+        let mut worklist = Vec::new();
+        for eclass in self.classes() {
+            if should_update_parents(&eclass.data) {
+                let id_set = eclass.parents.iter().map(|pi| pi.1).collect::<HashSet<_>>();
+                worklist.push((id_set.into_iter().collect(), eclass.id));
+            }
+        }
+        return worklist;
     }
 
     /// Given an eclass, get the nearest expressions that appear in the original expression
-    /// and is equivalent to the expression that contains the pattern expression after rewrites 
-    pub fn find_nearest_expr(&self, id: &Id, rw: Option<L>, func: &Box<impl Fn(&N::Data) -> bool>) -> Option<(&N::Data, Option<L>)> {
+    /// and is equivalent to the expression that contains the pattern expression after rewrites
+    pub fn find_nearest_expr(
+        &self,
+        id: &Id,
+        rw: Option<L>,
+        func: &Box<impl Fn(&N::Data) -> bool>,
+    ) -> Option<(&N::Data, Option<L>)> {
         if let Some(eclass) = self.classes.get(&id) {
             if let Some(result) = self.get_class_data(id) {
                 if func(&result) {
                     // println!("{:?} found at eclass {}", result, id);
-                    return Some((result, rw.clone()))
+                    return Some((result, rw.clone()));
                 } else {
                     let parents = &eclass.parents;
                     if parents.len() == 0 {
                         // println!("No parent for eclass {}", id);
-                        return None
+                        return None;
                     } else {
                         for enode in parents.iter() {
                             // println!("Searching for parent enode {:?}", enode);
                             let mut enode = enode.clone();
                             enode.0.update_children(|id| self.find(id));
-                            if let Some(result) = self.find_nearest_expr(&self.find(enode.1), Some(enode.0.clone()), func) {
+                            if let Some(result) = self.find_nearest_expr(
+                                &self.find(enode.1),
+                                Some(enode.0.clone()),
+                                func,
+                            ) {
                                 // println!("{:?} success", enode);
-                                return Some(result)
+                                return Some(result);
                             }
                         }
-                        return None
+                        return None;
                     }
                 }
             }
             // println!("No original expr found");
-            return None
+            return None;
         }
         // println!("No eclass {} found", id);
-        return None
+        return None;
     }
 
     /// Adds an enode to the [`EGraph`].
@@ -737,6 +764,9 @@ mod tests {
         egraph.union(x, y);
         egraph.rebuild();
 
-        egraph.dot(&(|_x, _y| false)).to_dot("target/foo.dot").unwrap();
+        egraph
+            .dot(&(|_x, _y| false))
+            .to_dot("target/foo.dot")
+            .unwrap();
     }
 }
