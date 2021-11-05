@@ -322,7 +322,7 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         let mut worklist = Vec::new();
         for eclass in self.classes() {
             if should_update_parents(&eclass.data) {
-                let id_set = eclass.parents.iter().map(|pi| pi.1).collect::<HashSet<_>>();
+                let id_set = eclass.parents.iter().map(|pi| self.find(pi.1)).collect::<HashSet<_>>();
                 worklist.push((id_set.into_iter().collect(), eclass.id));
             }
         }
