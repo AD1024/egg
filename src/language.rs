@@ -389,6 +389,7 @@ impl<L: Language + Display> RecExpr<L> {
         }
     }
 
+    /// Serialize an RecExpr to Json format
     pub fn serialize(&self) -> Value {
         let mut nodes = Vec::new();
         for (id, node) in self.nodes.iter().enumerate() {

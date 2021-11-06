@@ -317,12 +317,16 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
     /// to update analysis data using the second Id.
     pub fn analysis_update_worklist(
         &self,
-        should_update_parents: impl Fn(&N::Data) -> bool,
+        should_update_parents: impl Fn(&N::Data, &Vec<(L, Id)>) -> bool,
     ) -> Vec<(Vec<Id>, Id)> {
         let mut worklist = Vec::new();
         for eclass in self.classes() {
-            if should_update_parents(&eclass.data) {
-                let id_set = eclass.parents.iter().map(|pi| self.find(pi.1)).collect::<HashSet<_>>();
+            if should_update_parents(&eclass.data, &eclass.parents) {
+                let id_set = eclass
+                    .parents
+                    .iter()
+                    .map(|pi| self.find(pi.1))
+                    .collect::<HashSet<_>>();
                 worklist.push((id_set.into_iter().collect(), eclass.id));
             }
         }
