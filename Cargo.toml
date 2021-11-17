@@ -16,7 +16,8 @@ log = "0.4"
 smallvec = { version = "1", features = ["union", "const_generics"] }
 indexmap = "1"
 instant = "0.1"
-once_cell = "1"
+# Had to make this more specific to avoid conflict with heim requirement from TVM.
+once_cell = "~1.5"
 # for the serde-1 feature
 serde = { version = "1", features = ["derive"], optional = true }
 # for the reports feature
