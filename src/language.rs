@@ -350,6 +350,52 @@ impl<L: Language> RecExpr<L> {
         self.nodes.push(node);
         Id::from(self.nodes.len() - 1)
     }
+
+    pub(crate) fn compact(mut self) -> Self {
+        let mut ids = HashMap::<Id, Id>::default();
+        let mut set = IndexSet::default();
+        for (i, node) in self.nodes.drain(..).enumerate() {
+            let node = node.map_children(|id| ids[&id]);
+            let new_id = set.insert_full(node).0;
+            ids.insert(Id::from(i), Id::from(new_id));
+        }
+        self.nodes.extend(set);
+        self
+    }
+
+    pub(crate) fn extract(&self, new_root: Id) -> Self {
+        let mut ids = HashMap::<Id, Id>::default();
+        let mut set = IndexSet::default();
+        let mut todo = vec![new_root];
+        while let Some(id) = todo.last().copied() {
+            if ids.contains_key(&id) {
+                todo.pop();
+                continue;
+            }
+
+            let node = &self[id];
+
+            // check to see if we can do this node yet
+            let mut ids_has_all_children = true;
+            for child in node.children() {
+                if !ids.contains_key(child) {
+                    ids_has_all_children = false;
+                    todo.push(*child)
+                }
+            }
+
+            // all children are processed, so we can lookup this node safely
+            if ids_has_all_children {
+                let new_id = set.insert_full(node.clone().map_children(|i| ids[&i])).0;
+                ids.insert(id, Id::from(new_id));
+                todo.pop();
+            }
+        }
+
+        Self {
+            nodes: set.into_iter().collect(),
+        }
+    }
 }
 
 impl<L: Language> Index<Id> for RecExpr<L> {
