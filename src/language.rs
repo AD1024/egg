@@ -305,7 +305,8 @@ impl LanguageChildren for Id {
 /// [`serde::Serialize`][https://docs.rs/serde/latest/serde/trait.Serialize.html].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RecExpr<L> {
-    nodes: Vec<L>,
+    /// Nodes stored in the RecExpr
+    pub nodes: Vec<L>,
 }
 
 #[cfg(feature = "serde-1")]
