@@ -2,6 +2,7 @@ use crate::Id;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind {
     parents: Vec<Id>,
 }
@@ -11,6 +12,10 @@ impl UnionFind {
         let id = Id::from(self.parents.len());
         self.parents.push(id);
         id
+    }
+
+    pub fn size(&self) -> usize {
+        self.parents.len()
     }
 
     fn parent(&self, query: Id) -> Id {
@@ -37,11 +42,8 @@ impl UnionFind {
         current
     }
 
-    /// Returns (new_leader, old_leader)
+    /// Given two leader ids, unions the two eclasses making root1 the leader.
     pub fn union(&mut self, root1: Id, root2: Id) -> Id {
-        assert_eq!(root1, self.parent(root1));
-        assert_eq!(root2, self.parent(root2));
-        assert_ne!(root1, root2);
         *self.parent_mut(root2) = root1;
         root1
     }
@@ -58,7 +60,7 @@ mod tests {
     #[test]
     fn union_find() {
         let n = 10;
-        let id = |u: usize| Id::from(u);
+        let id = Id::from;
 
         let mut uf = UnionFind::default();
         for _ in 0..n {

@@ -157,12 +157,12 @@ Let's put it all together with an example referring to the four e-graphs in the
     associates with multiplication.
    This rewrite is critical to discovering the cancellation of 2s that we are looking for,
      and it still works despite the fact that we applied the "wrong" rewrite previously.
-4. Applying rewrites _x / x → 1_ and _1 × x → x_ doesn't add any new e-nodes,
+4. Applying rewrites _x / x → 1_ and _x × 1 → x_ doesn't add any new e-nodes,
      since all the e-nodes were already present in the e-graph.
    The result only unions e-classes,
      meaning that e-graph actually got _smaller_ from applying these rewrites,
      even though it now represents more terms.
-   In fact, observe that that the top-right "×" e-node's left child is _itself_;
+   In fact, observe that the top-right "×" e-node's left child is _itself_;
      this cycle means the e-class represents the _infinite_ (!) set of terms
      _a_, _a × 1_, _a × 1 × 1_, and so on.
 
@@ -262,7 +262,7 @@ Most of this was covered above, but we need to define two new terms:
   If all the rewrites are in this state, we say the e-graph is _saturated_,
     meaning that the e-graph encodes all possible equivalences derivable from
     the given rewrites.
-- _Extraction_ is a procedure for picking a single represented from an e-class
+- _Extraction_ is a procedure for picking a single represented term from an e-class
   that is optimal according to some cost function.
   `egg`'s [`Extractor`]s provide this functionality.
 

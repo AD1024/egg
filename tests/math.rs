@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 use egg::{rewrite as rw, *};
 use ordered_float::NotNan;
 
@@ -50,49 +48,56 @@ impl egg::CostFunction<Math> for MathCostFn {
 #[derive(Default)]
 pub struct ConstantFold;
 impl Analysis<Math> for ConstantFold {
-    type Data = Option<Constant>;
+    type Data = Option<(Constant, PatternAst<Math>)>;
 
     fn make(egraph: &EGraph, enode: &Math) -> Self::Data {
-        let x = |i: &Id| egraph[*i].data;
+        let x = |i: &Id| egraph[*i].data.as_ref().map(|d| d.0);
         Some(match enode {
-            Math::Constant(c) => *c,
-            Math::Add([a, b]) => x(a)? + x(b)?,
-            Math::Sub([a, b]) => x(a)? - x(b)?,
-            Math::Mul([a, b]) => x(a)? * x(b)?,
-            Math::Div([a, b]) if x(b) != Some(0.0.into()) => x(a)? / x(b)?,
+            Math::Constant(c) => (*c, format!("{}", c).parse().unwrap()),
+            Math::Add([a, b]) => (
+                x(a)? + x(b)?,
+                format!("(+ {} {})", x(a)?, x(b)?).parse().unwrap(),
+            ),
+            Math::Sub([a, b]) => (
+                x(a)? - x(b)?,
+                format!("(- {} {})", x(a)?, x(b)?).parse().unwrap(),
+            ),
+            Math::Mul([a, b]) => (
+                x(a)? * x(b)?,
+                format!("(* {} {})", x(a)?, x(b)?).parse().unwrap(),
+            ),
+            Math::Div([a, b]) if x(b) != Some(NotNan::new(0.0).unwrap()) => (
+                x(a)? / x(b)?,
+                format!("(/ {} {})", x(a)?, x(b)?).parse().unwrap(),
+            ),
             _ => return None,
         })
     }
 
-    fn merge(&self, a: &mut Self::Data, b: Self::Data) -> Option<Ordering> {
-        match (a.as_mut(), b) {
-            (None, None) => Some(Ordering::Equal),
-            (None, Some(_)) => {
-                *a = b;
-                Some(Ordering::Less)
-            }
-            (Some(_), None) => Some(Ordering::Greater),
-            (Some(_), Some(_)) => Some(Ordering::Equal),
-        }
-        // if a.is_none() && b.is_some() {
-        //     *a = b
-        // }
-        // cmp
+    fn merge(&mut self, to: &mut Self::Data, from: Self::Data) -> DidMerge {
+        merge_option(to, from, |a, b| {
+            assert_eq!(a.0, b.0, "Merged non-equal constants");
+            DidMerge(false, false)
+        })
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
-        let class = &mut egraph[id];
-        if let Some(c) = class.data {
-            let added = egraph.add(Math::Constant(c));
-            let (id, _did_something) = egraph.union(id, added);
+        let data = egraph[id].data.clone();
+        if let Some((c, pat)) = data {
+            if egraph.are_explanations_enabled() {
+                egraph.union_instantiations(
+                    &pat,
+                    &format!("{}", c).parse().unwrap(),
+                    &Default::default(),
+                    "constant_fold".to_string(),
+                );
+            } else {
+                let added = egraph.add(Math::Constant(c));
+                egraph.union(id, added);
+            }
             // to not prune, comment this out
             egraph[id].nodes.retain(|n| n.is_leaf());
 
-            assert!(
-                !egraph[id].nodes.is_empty(),
-                "empty eclass! {:#?}",
-                egraph[id]
-            );
             #[cfg(debug_assertions)]
             egraph[id].assert_unique_leaves();
         }
@@ -130,8 +135,8 @@ fn is_sym(var: &str) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
 fn is_not_zero(var: &str) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     let var = var.parse().unwrap();
     move |egraph, _, subst| {
-        if let Some(n) = egraph[subst[var]].data {
-            *n != 0.0
+        if let Some(n) = &egraph[subst[var]].data {
+            *(n.0) != 0.0
         } else {
             true
         }
@@ -270,6 +275,7 @@ egg::test_fn! {
         .with_time_limit(std::time::Duration::from_secs(10))
         .with_iter_limit(60)
         .with_node_limit(100_000)
+        .with_explanations_enabled()
         // HACK this needs to "see" the end expression
         .with_expr(&"(* x (- (* 3 x) 14))".parse().unwrap()),
     "(d x (- (pow x 3) (* 7 (pow x 2))))"
@@ -312,4 +318,192 @@ fn assoc_mul_saturates() {
         .run(&rules());
 
     assert!(matches!(runner.stop_reason, Some(StopReason::Saturated)));
+}
+
+#[test]
+fn test_union_trusted() {
+    let expr: RecExpr<Math> = "(+ (* x 1) y)".parse().unwrap();
+    let expr2 = "20".parse().unwrap();
+    let mut runner: Runner<Math, ConstantFold> = Runner::default()
+        .with_explanations_enabled()
+        .with_iter_limit(3)
+        .with_expr(&expr)
+        .run(&rules());
+    let lhs = runner.egraph.add_expr(&expr);
+    let rhs = runner.egraph.add_expr(&expr2);
+    runner.egraph.union_trusted(lhs, rhs, "whatever");
+    let proof = runner.explain_equivalence(&expr, &expr2).get_flat_strings();
+    assert_eq!(proof, vec!["(+ (* x 1) y)", "(Rewrite=> whatever 20)"]);
+}
+
+#[cfg(feature = "lp")]
+#[test]
+fn math_lp_extract() {
+    let expr: RecExpr<Math> = "(pow (+ x (+ x x)) (+ x x))".parse().unwrap();
+
+    let runner: Runner<Math, ConstantFold> = Runner::default()
+        .with_iter_limit(3)
+        .with_expr(&expr)
+        .run(&rules());
+    let root = runner.roots[0];
+
+    let best = Extractor::new(&runner.egraph, AstSize).find_best(root).1;
+    let lp_best = LpExtractor::new(&runner.egraph, AstSize).solve(root);
+
+    println!("input   [{}] {}", expr.as_ref().len(), expr);
+    println!("normal  [{}] {}", best.as_ref().len(), best);
+    println!("ilp cse [{}] {}", lp_best.as_ref().len(), lp_best);
+
+    assert_ne!(best, lp_best);
+    assert_eq!(lp_best.as_ref().len(), 4);
+}
+
+#[test]
+fn math_ematching_bench() {
+    let exprs = &[
+        "(i (ln x) x)",
+        "(i (+ x (cos x)) x)",
+        "(i (* (cos x) x) x)",
+        "(d x (+ 1 (* 2 x)))",
+        "(d x (- (pow x 3) (* 7 (pow x 2))))",
+        "(+ (* y (+ x y)) (- (+ x 2) (+ x x)))",
+        "(/ 1 (- (/ (+ 1 (sqrt five)) 2) (/ (- 1 (sqrt five)) 2)))",
+    ];
+
+    let extra_patterns = &[
+        "(+ ?a (+ ?b ?c))",
+        "(+ (+ ?a ?b) ?c)",
+        "(* ?a (* ?b ?c))",
+        "(* (* ?a ?b) ?c)",
+        "(+ ?a (* -1 ?b))",
+        "(* ?a (pow ?b -1))",
+        "(* ?a (+ ?b ?c))",
+        "(pow ?a (+ ?b ?c))",
+        "(+ (* ?a ?b) (* ?a ?c))",
+        "(* (pow ?a ?b) (pow ?a ?c))",
+        "(* ?x (/ 1 ?x))",
+        "(d ?x (+ ?a ?b))",
+        "(+ (d ?x ?a) (d ?x ?b))",
+        "(d ?x (* ?a ?b))",
+        "(+ (* ?a (d ?x ?b)) (* ?b (d ?x ?a)))",
+        "(d ?x (sin ?x))",
+        "(d ?x (cos ?x))",
+        "(* -1 (sin ?x))",
+        "(* -1 (cos ?x))",
+        "(i (cos ?x) ?x)",
+        "(i (sin ?x) ?x)",
+        "(d ?x (ln ?x))",
+        "(d ?x (pow ?f ?g))",
+        "(* (pow ?f ?g) (+ (* (d ?x ?f) (/ ?g ?f)) (* (d ?x ?g) (ln ?f))))",
+        "(i (pow ?x ?c) ?x)",
+        "(/ (pow ?x (+ ?c 1)) (+ ?c 1))",
+        "(i (+ ?f ?g) ?x)",
+        "(i (- ?f ?g) ?x)",
+        "(+ (i ?f ?x) (i ?g ?x))",
+        "(- (i ?f ?x) (i ?g ?x))",
+        "(i (* ?a ?b) ?x)",
+        "(- (* ?a (i ?b ?x)) (i (* (d ?x ?a) (i ?b ?x)) ?x))",
+    ];
+
+    egg::test::bench_egraph("math", rules(), exprs, extra_patterns);
+}
+
+#[test]
+fn test_basic_egraph_union_intersect() {
+    let mut egraph1 = EGraph::new(ConstantFold {}).with_explanations_enabled();
+    let mut egraph2 = EGraph::new(ConstantFold {}).with_explanations_enabled();
+    egraph1.union_instantiations(
+        &"x".parse().unwrap(),
+        &"y".parse().unwrap(),
+        &Default::default(),
+        "",
+    );
+    egraph1.union_instantiations(
+        &"y".parse().unwrap(),
+        &"z".parse().unwrap(),
+        &Default::default(),
+        "",
+    );
+    egraph2.union_instantiations(
+        &"x".parse().unwrap(),
+        &"y".parse().unwrap(),
+        &Default::default(),
+        "",
+    );
+    egraph2.union_instantiations(
+        &"x".parse().unwrap(),
+        &"a".parse().unwrap(),
+        &Default::default(),
+        "",
+    );
+
+    let mut egraph3 = EGraph::new(ConstantFold {}).with_explanations_enabled();
+    egraph1.egraph_intersect_incomplete(&mut egraph2, &mut egraph3);
+
+    egraph2.egraph_union(&egraph1);
+
+    assert_eq!(
+        egraph2.add_expr(&"x".parse().unwrap()),
+        egraph2.add_expr(&"y".parse().unwrap())
+    );
+    assert_eq!(
+        egraph3.add_expr(&"x".parse().unwrap()),
+        egraph3.add_expr(&"y".parse().unwrap())
+    );
+
+    assert_eq!(
+        egraph2.add_expr(&"x".parse().unwrap()),
+        egraph2.add_expr(&"z".parse().unwrap())
+    );
+    assert_ne!(
+        egraph3.add_expr(&"x".parse().unwrap()),
+        egraph3.add_expr(&"z".parse().unwrap())
+    );
+    assert_eq!(
+        egraph2.add_expr(&"x".parse().unwrap()),
+        egraph2.add_expr(&"a".parse().unwrap())
+    );
+    assert_ne!(
+        egraph3.add_expr(&"x".parse().unwrap()),
+        egraph3.add_expr(&"a".parse().unwrap())
+    );
+
+    assert_eq!(
+        egraph2.add_expr(&"y".parse().unwrap()),
+        egraph2.add_expr(&"a".parse().unwrap())
+    );
+    assert_ne!(
+        egraph3.add_expr(&"y".parse().unwrap()),
+        egraph3.add_expr(&"a".parse().unwrap())
+    );
+}
+
+#[test]
+fn test_intersect_basic() {
+    let mut egraph1 = EGraph::new(ConstantFold {}).with_explanations_enabled();
+    let mut egraph2 = EGraph::new(ConstantFold {}).with_explanations_enabled();
+    egraph1.union_instantiations(
+        &"(+ x 0)".parse().unwrap(),
+        &"(+ y 0)".parse().unwrap(),
+        &Default::default(),
+        "",
+    );
+    egraph2.union_instantiations(
+        &"x".parse().unwrap(),
+        &"y".parse().unwrap(),
+        &Default::default(),
+        "",
+    );
+
+    let mut egraph3 = EGraph::new(ConstantFold {}).with_explanations_enabled();
+    egraph1.egraph_intersect_incomplete(&mut egraph2, &mut egraph3);
+
+    assert_ne!(
+        egraph3.add_expr(&"x".parse().unwrap()),
+        egraph3.add_expr(&"y".parse().unwrap())
+    );
+    assert_eq!(
+        egraph3.add_expr(&"(+ x 0)".parse().unwrap()),
+        egraph3.add_expr(&"(+ y 0)".parse().unwrap())
+    );
 }
