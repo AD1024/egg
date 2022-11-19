@@ -1,6 +1,7 @@
 use coin_cbc::{Col, Model, Sense};
 
 use crate::*;
+use rand::Rng;
 
 /// A cost function to be used by an [`LpExtractor`].
 #[cfg_attr(docsrs, doc(cfg(feature = "lp")))]
@@ -56,6 +57,7 @@ pub struct LpExtractor<'a, L: Language, N: Analysis<L>> {
     egraph: &'a EGraph<L, N>,
     model: Model,
     vars: HashMap<Id, ClassVars>,
+    fractional_extract: bool,
 }
 
 struct ClassVars {
@@ -71,7 +73,7 @@ where
 {
     /// Create an [`LpExtractor`] using costs from the given [`LpCostFunction`].
     /// See those docs for details.
-    pub fn new<CF>(egraph: &'a EGraph<L, N>, mut cost_function: CF) -> Self
+    pub fn new<CF>(egraph: &'a EGraph<L, N>, mut cost_function: CF, fractional: bool) -> Self
     where
         CF: LpCostFunction<L, N>,
     {
@@ -83,9 +85,9 @@ where
             .classes()
             .map(|class| {
                 let cvars = ClassVars {
-                    active: model.add_binary(),
+                    active: if fractional { model.add_col() } else { model.add_binary() },
                     order: model.add_col(),
-                    nodes: class.nodes.iter().map(|_| model.add_binary()).collect(),
+                    nodes: class.nodes.iter().map(|_| if fractional { model.add_col() } else { model.add_binary() }).collect(),
                 };
                 model.set_col_upper(cvars.order, max_order);
                 (class.id, cvars)
@@ -101,10 +103,26 @@ where
             // class active == some node active
             // sum(for node_active in class) == class_active
             let row = model.add_row();
-            model.set_row_equal(row, 0.0);
-            model.set_weight(row, class.active, -1.0);
+            if fractional {
+                model.set_row_equal(row, 1.0);
+            } else {
+                model.set_row_equal(row, 0.0);
+                model.set_weight(row, class.active, -1.0);
+            }
             for &node_active in &class.nodes {
                 model.set_weight(row, node_active, 1.0);
+            }
+
+            if fractional {
+                // normalized weights for enodes
+                // let row = model.add_row();
+                // model.set_row_equal(row, 1.0);
+                for &node_active in &class.nodes {
+                    let node_row = model.add_row();
+                    model.set_row_upper(node_row, 1.0);
+                    model.set_weight(node_row, node_active, 1.0);
+                    // model.set_weight(row, node_active, 1.0);
+                }
             }
 
             for (i, (node, &node_active)) in egraph[id].iter().zip(&class.nodes).enumerate() {
@@ -140,6 +158,7 @@ where
             egraph,
             model,
             vars,
+            fractional_extract: fractional,
         }
     }
 
@@ -160,8 +179,10 @@ where
     pub fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>) {
         let egraph = self.egraph;
 
-        for class in self.vars.values() {
-            self.model.set_binary(class.active);
+        if !self.fractional_extract {
+            for class in self.vars.values() {
+                self.model.set_binary(class.active);
+            }
         }
 
         for root in roots {
@@ -188,7 +209,24 @@ where
             }
             let v = &self.vars[&id];
             assert!(solution.col(v.active) > 0.0);
-            let node_idx = v.nodes.iter().position(|&n| solution.col(n) > 0.0).unwrap();
+            // println!("decide for eclass {}", id);
+            let node_idx = {
+                if self.fractional_extract {
+                    let mut rng = rand::thread_rng();
+                    let mut choice = 0;
+                    for (i, &node_active) in v.nodes.iter().enumerate() {
+                        // println!("{} {}", i, solution.col(node_active));
+                        if solution.col(node_active) > rng.gen_range(0.0..1.0) {
+                            choice = i;
+                            break;
+                        }
+                    }
+                    choice
+                } else {
+                    // v.nodes.iter().for_each(|&n| println!("{}", solution.col(n)));
+                    v.nodes.iter().position(|&n| solution.col(n) > 0.0).unwrap()
+                }
+            };
             let node = &self.egraph[id].nodes[node_idx];
             if node.all(|child| ids.contains_key(&child)) {
                 let new_id = expr.add(node.clone().map_children(|i| ids[&self.egraph.find(i)]));
@@ -252,7 +290,7 @@ mod tests {
         let f = egraph.add(S::new("f", vec![plus]));
         let g = egraph.add(S::new("g", vec![plus]));
 
-        let mut ext = LpExtractor::new(&egraph, AstSize);
+        let mut ext = LpExtractor::new(&egraph, AstSize, false);
         ext.timeout(10.0); // way too much time
         let (exp, ids) = ext.solve_multiple(&[f, g]);
         println!("{:?}", exp);

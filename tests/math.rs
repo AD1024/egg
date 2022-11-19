@@ -348,7 +348,7 @@ fn math_lp_extract() {
     let root = runner.roots[0];
 
     let best = Extractor::new(&runner.egraph, AstSize).find_best(root).1;
-    let lp_best = LpExtractor::new(&runner.egraph, AstSize).solve(root);
+    let lp_best = LpExtractor::new(&runner.egraph, AstSize, true).solve(root);
 
     println!("input   [{}] {}", expr.as_ref().len(), expr);
     println!("normal  [{}] {}", best.as_ref().len(), best);
