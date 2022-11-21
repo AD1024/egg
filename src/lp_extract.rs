@@ -103,25 +103,25 @@ where
             // class active == some node active
             // sum(for node_active in class) == class_active
             let row = model.add_row();
-            if fractional {
-                model.set_row_equal(row, 1.0);
-            } else {
-                model.set_row_equal(row, 0.0);
-                model.set_weight(row, class.active, -1.0);
-            }
+            // if fractional {
+            //     model.set_row_equal(row, 1.0);
+            // } else {
+            model.set_row_lower(row, 0.0);
+            model.set_weight(row, class.active, -1.0);
+            // }
             for &node_active in &class.nodes {
                 model.set_weight(row, node_active, 1.0);
             }
 
             if fractional {
                 // normalized weights for enodes
-                // let row = model.add_row();
-                // model.set_row_equal(row, 1.0);
+                let row = model.add_row();
+                model.set_row_upper(row, 1.0);
                 for &node_active in &class.nodes {
-                    let node_row = model.add_row();
-                    model.set_row_upper(node_row, 1.0);
-                    model.set_weight(node_row, node_active, 1.0);
-                    // model.set_weight(row, node_active, 1.0);
+                    // let node_row = model.add_row();
+                    // model.set_row_upper(node_row, 1.0);
+                    // model.set_weight(node_row, node_active, 1.0);
+                    model.set_weight(row, node_active, 1.0);
                 }
             }
 
@@ -191,11 +191,11 @@ where
         }
 
         let solution = self.model.solve();
-        log::info!(
-            "CBC status {:?}, {:?}",
-            solution.raw().status(),
-            solution.raw().secondary_status()
-        );
+        // log::info!(
+        //     "CBC status {:?}, {:?}",
+        //     solution.raw().status(),
+        //     solution.raw().secondary_status()
+        // );
 
         let mut todo: Vec<Id> = roots.iter().map(|id| self.egraph.find(*id)).collect();
         let mut expr = RecExpr::default();
@@ -208,15 +208,19 @@ where
                 continue;
             }
             let v = &self.vars[&id];
-            assert!(solution.col(v.active) > 0.0);
-            // println!("decide for eclass {}", id);
+            assert!(solution.col(v.active) > 0.0, "class {} not active: {}", id, solution.col(v.active));
+            println!("decide for eclass {}", id);
             let node_idx = {
                 if self.fractional_extract {
                     let mut rng = rand::thread_rng();
                     let mut choice = 0;
+                    let total = v.nodes.iter().map(|&x| solution.col(x)).sum::<f64>();
                     for (i, &node_active) in v.nodes.iter().enumerate() {
-                        // println!("{} {}", i, solution.col(node_active));
-                        if solution.col(node_active) > rng.gen_range(0.0..1.0) {
+                        println!("{} {}", i, solution.col(node_active) / total);
+                        if solution.col(node_active) > 0.0 && solution.col(v.nodes[choice]) == 0.0 {
+                            choice = i;
+                        }
+                        if solution.col(node_active) / total > rng.gen_range(0.1..1.0) {
                             choice = i;
                             break;
                         }
@@ -227,6 +231,7 @@ where
                     v.nodes.iter().position(|&n| solution.col(n) > 0.0).unwrap()
                 }
             };
+            println!("node_idx {} with sol: {}", node_idx, solution.col(v.nodes[node_idx]));
             let node = &self.egraph[id].nodes[node_idx];
             if node.all(|child| ids.contains_key(&child)) {
                 let new_id = expr.add(node.clone().map_children(|i| ids[&self.egraph.find(i)]));

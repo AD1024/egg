@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use egg::{rewrite as rw, *};
 use fxhash::FxHashSet as HashSet;
 
@@ -308,6 +310,49 @@ egg::test_fn! {
           2))))"
     =>
     "(lam ?x (+ (var ?x) 2))"
+}
+
+#[cfg(feature = "lp")]
+#[test]
+fn test_fractional_extract() {
+    use log::log;
+
+    use crate::LpExtractor;
+    struct AstDepthLp;
+    impl LpCostFunction<Lambda, LambdaAnalysis> for AstDepthLp {
+        fn node_cost(&mut self, egraph: &EGraph, eclass: Id, enode: &Lambda) -> f64 {
+            1.0 
+            // + enode.fold(0.0, |max, e| {
+            //     let min_child_depth = egraph[e].nodes.iter().fold(f64::MAX, |min, n| min.min(self.node_cost(egraph, eclass, n)));
+            //     f64::max(max, min_child_depth)
+            // })
+        }
+    }
+    let input_expr: RecExpr<_> = 
+        "(let compose (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x))))))
+     (let add1 (lam y (+ (var y) 1))
+     (app (app (var compose) (var add1))
+          (app (app (var compose) (var add1))
+               (app (app (var compose) (var add1))
+                    (app (app (var compose) (var add1))
+                         (app (app (var compose) (var add1))
+                              (app (app (var compose) (var add1))
+                                   (var add1)))))))))".parse().unwrap();
+    let mut egraph = EGraph::default();
+    let root_id = egraph.add_expr(&input_expr);
+    let rules = rules();
+    let runner = Runner::default()
+        .with_expr(&input_expr)
+        .with_egraph(egraph)
+        .with_iter_limit(60)
+        .with_node_limit(150_000)
+        .with_time_limit(std::time::Duration::from_secs(20)).run(&rules);
+    // runner.print_report();
+    let mut lp_extractor = LpExtractor::new(&runner.egraph, AstDepthLp, true);
+    println!("INFO:::::::: Solve for root: {}", root_id);
+    let expr = lp_extractor.solve(runner.egraph.find(root_id));
+    println!("expr: {}", expr);
 }
 
 egg::test_fn! {
