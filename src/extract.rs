@@ -40,7 +40,7 @@ assert_eq!(best, "10".parse().unwrap());
 #[derive(Debug)]
 pub struct Extractor<'a, CF: CostFunction<L>, L: Language, N: Analysis<L>> {
     cost_function: CF,
-    costs: HashMap<Id, (CF::Cost, L)>,
+    pub costs: HashMap<Id, (CF::Cost, L)>,
     egraph: &'a EGraph<L, N>,
 }
 

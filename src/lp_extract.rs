@@ -78,6 +78,7 @@ where
         CF: LpCostFunction<L, N>,
     {
         let max_order = egraph.total_number_of_nodes() as f64 * 10.0;
+        println!("Fractional: {}", fractional);
 
         let mut model = Model::default();
 
@@ -111,18 +112,6 @@ where
             // }
             for &node_active in &class.nodes {
                 model.set_weight(row, node_active, 1.0);
-            }
-
-            if fractional {
-                // normalized weights for enodes
-                let row = model.add_row();
-                model.set_row_upper(row, 1.0);
-                for &node_active in &class.nodes {
-                    // let node_row = model.add_row();
-                    // model.set_row_upper(node_row, 1.0);
-                    // model.set_weight(node_row, node_active, 1.0);
-                    model.set_weight(row, node_active, 1.0);
-                }
             }
 
             for (i, (node, &node_active)) in egraph[id].iter().zip(&class.nodes).enumerate() {
@@ -182,6 +171,9 @@ where
         if !self.fractional_extract {
             for class in self.vars.values() {
                 self.model.set_binary(class.active);
+                for &node_active in &class.nodes {
+                    self.model.set_binary(node_active);
+                }
             }
         }
 
@@ -216,7 +208,7 @@ where
                     let mut choice = 0;
                     let total = v.nodes.iter().map(|&x| solution.col(x)).sum::<f64>();
                     for (i, &node_active) in v.nodes.iter().enumerate() {
-                        println!("{} {}", i, solution.col(node_active) / total);
+                        println!("{} {} (total: {})", i, solution.col(node_active) / total, total);
                         if solution.col(node_active) > 0.0 && solution.col(v.nodes[choice]) == 0.0 {
                             choice = i;
                         }
@@ -238,6 +230,9 @@ where
                 ids.insert(id, new_id);
                 todo.pop();
             } else {
+                for child in node.children() {
+                    println!("child {} active: {}", child, solution.col(self.vars[&child].active));
+                }
                 todo.extend_from_slice(node.children())
             }
         }
