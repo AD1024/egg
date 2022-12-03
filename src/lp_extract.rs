@@ -57,6 +57,7 @@ pub struct LpExtractor<'a, L: Language, N: Analysis<L>> {
     egraph: &'a EGraph<L, N>,
     model: Model,
     vars: HashMap<Id, ClassVars>,
+    cycle: HashSet<(Id, usize)>,
     fractional_extract: bool,
 }
 
@@ -101,23 +102,35 @@ where
         });
 
         for (&id, class) in &vars {
+            // class active maximum to 1.0
+            // let row = model.add_row();
+            // model.set_row_upper(row, 1.0);
+            // model.set_weight(row, class.active, 1.0);
+
             // class active == some node active
             // sum(for node_active in class) == class_active
             let row = model.add_row();
-            // if fractional {
-            //     model.set_row_equal(row, 1.0);
-            // } else {
             model.set_row_lower(row, 0.0);
             model.set_weight(row, class.active, -1.0);
-            // }
             for &node_active in &class.nodes {
                 model.set_weight(row, node_active, 1.0);
+            }
+
+            if (0..egraph[id].len()).all(|i| cycles.contains(&(id, i))) {
+                // class active == 0 && node_active == 0 if
+                // all children are in a cycle
+                model.set_row_upper(row, 0.0);
+                class.nodes.iter().for_each(|&node_active| {
+                    model.set_col_upper(node_active, 0.0);
+                });
+                continue;
             }
 
             for (i, (node, &node_active)) in egraph[id].iter().zip(&class.nodes).enumerate() {
                 if cycles.contains(&(id, i)) {
                     model.set_col_upper(node_active, 0.0);
                     model.set_col_lower(node_active, 0.0);
+                    println!("Id: {} node: {} is in a cycle (total: {})", id, i, egraph[id].len());
                     continue;
                 }
 
@@ -139,6 +152,9 @@ where
             for (node, &node_active) in class.iter().zip(&vars[&class.id].nodes) {
                 model.set_obj_coeff(node_active, cost_function.node_cost(egraph, class.id, node));
             }
+            // for (_, class) in &vars {
+            //     model.set_obj_coeff(class.active, -1.0);
+            // }
         }
 
         dbg!(max_order);
@@ -148,6 +164,7 @@ where
             model,
             vars,
             fractional_extract: fractional,
+            cycle: cycles
         }
     }
 
@@ -171,9 +188,6 @@ where
         if !self.fractional_extract {
             for class in self.vars.values() {
                 self.model.set_binary(class.active);
-                for &node_active in &class.nodes {
-                    self.model.set_binary(node_active);
-                }
             }
         }
 
@@ -199,6 +213,7 @@ where
                 todo.pop();
                 continue;
             }
+            let id = egraph.find(id);
             let v = &self.vars[&id];
             assert!(solution.col(v.active) > 0.0, "class {} not active: {}", id, solution.col(v.active));
             println!("decide for eclass {}", id);
@@ -230,8 +245,13 @@ where
                 ids.insert(id, new_id);
                 todo.pop();
             } else {
+                println!("Node of {} in cycle: {}", id, self.cycle.contains(&(id, node_idx)));
                 for child in node.children() {
                     println!("child {} active: {}", child, solution.col(self.vars[&child].active));
+                    if solution.col(self.vars[&child].active) == 0.0 {
+                        println!("child {} == 0: {:?} | {:?}", child,
+                            self.vars[&child].nodes.iter().map(|&n| solution.col(n)).collect::<Vec<_>>(), (0..egraph[*child].len()).map(|x| self.cycle.contains(&(*child, x))).collect::<Vec<_>>());
+                    }
                 }
                 todo.extend_from_slice(node.children())
             }
