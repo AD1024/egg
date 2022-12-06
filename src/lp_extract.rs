@@ -69,6 +69,7 @@ pub struct FractionalExtractor<'a, L: Language, N: Analysis<L>> {
     model: Problem<'a>,
     vars: HashMap<Id, FractionalClassVar>,
     fallback: bool,
+    cycles: HashSet<(Id, usize)>,
 }
 
 struct FractionalClassVar {
@@ -171,7 +172,12 @@ where
                 if cycles.contains(&(id, i)) {
                     model.set_col_upper(node_active, 0.0);
                     model.set_col_lower(node_active, 0.0);
-                    println!("Id: {} node: {} is in a cycle (total: {})", id, i, egraph[id].len());
+                    println!(
+                        "Id: {} node: {} is in a cycle (total: {})",
+                        id,
+                        i,
+                        egraph[id].len()
+                    );
                     continue;
                 }
 
@@ -205,7 +211,7 @@ where
             model,
             vars,
             fractional_extract: fractional,
-            cycle: cycles
+            cycle: cycles,
         }
     }
 
@@ -300,7 +306,11 @@ where
                 ids.insert(id, new_id);
                 todo.pop();
             } else {
-                println!("Node of {} in cycle: {}", id, self.cycle.contains(&(id, node_idx)));
+                println!(
+                    "Node of {} in cycle: {}",
+                    id,
+                    self.cycle.contains(&(id, node_idx))
+                );
                 for child in node.children() {
                     println!(
                         "child {} active: {}",
@@ -347,6 +357,7 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
         CF: LpCostFunction<L, N>,
     {
         let max_order = (egraph.total_size() * 5) as f64;
+        // let num_eclass = egraph.total_size() as f64;
         let eps = 1.0 / (max_order * 2.0);
         let mut problem = rplex::Problem::new(env, "fractional_ext").unwrap();
         let vars = egraph
@@ -370,7 +381,7 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
                         let node_cost = cost_function.node_cost(egraph, cls.id, node);
                         let node_active_var = problem
                             .add_variable(
-                                var!(0.0 <= node_active <= 1.0 -> node_cost as variable_type),
+                                var!(0.0 <= node_active <= max_order -> node_cost as variable_type),
                             )
                             .unwrap();
                         node_active_var
@@ -386,10 +397,30 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
             })
             .collect::<HashMap<_, _>>();
 
+        println!(
+            "Num vars: {}",
+            vars.iter().map(|x| 1 + x.1.nodes.len()).sum::<usize>()
+        );
+
+        let mut cycles: HashSet<(Id, usize)> = Default::default();
+        find_cycles(egraph, |id, i| {
+            cycles.insert((id, i));
+        });
+
         // Constraint:
         // if a node is active, then at least one of the nodes in each child class is active
         for cls in egraph.classes() {
+            // let mut normalization_constraint = rplex::Constraint::new(ConstraintType::Eq, 1.0, format!("normalization_{}", cls.id));
             for (i, node) in cls.nodes.iter().enumerate() {
+                if cycles.contains(&(cls.id, i)) && cls.len() > 1 {
+                    let node_var_idx = vars[&cls.id].nodes[i];
+                    let cons_name = format!("cycle_{}_{}", cls.id, i);
+                    let mut constraint = rplex::Constraint::new(ConstraintType::Eq, 0.0, cons_name);
+                    constraint.add_wvar(rplex::WeightedVariable::new_idx(node_var_idx, 1.0));
+                    problem.add_constraint(constraint).unwrap();
+                    continue;
+                }
+                // normalization_constraint.add_wvar(rplex::WeightedVariable::new_idx(vars[&cls.id].nodes[i], 1.0));
                 let node_var_idx = vars[&cls.id].nodes[i];
                 for child in node.children() {
                     let cons_name = format!("child_active_{}_{}_{}", cls.id, i, child);
@@ -402,19 +433,20 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
                         constraint.add_wvar(WeightedVariable::new_idx(*child_node, 1.0));
                     }
                     problem.add_constraint(constraint).unwrap();
-                    if order_var {
-                        // topo_var(cls) - topo_var(child) - eps + 2 * (1 - node_var) >= 0
-                        // ==> topo_var(cls) - topo_var(child) - eps + 2 - 2 * node_var >= 0
-                        // ==> topo_var(cls) - topo_var(child) - 2 * node_var >= eps - 2
-                        let cls_topo_idx = vars[&cls.id].topo;
-                        let child_topo_idx = vars[&child].topo;
-                        let cons_name = format!("topo_{}_{}_{}", cls.id, i, child);
-                        let lhs = eps - 2.0;
-                        let constraint = con!(cons_name: lhs <= 1.0 cls_topo_idx + (-1.0) child_topo_idx + (-2.0) node_var_idx);
-                        problem.add_constraint(constraint).unwrap();
-                    }
+                    // if order_var {
+                    //     // topo_var(cls) - topo_var(child) - eps + 2 * (1 - node_var) >= 0
+                    //     // ==> topo_var(cls) - topo_var(child) - eps + 2 - 2 * node_var >= 0
+                    //     // ==> topo_var(cls) - topo_var(child) - 2 * node_var >= eps - 2
+                    //     let cls_topo_idx = vars[&cls.id].topo;
+                    //     let child_topo_idx = vars[&child].topo;
+                    //     let cons_name = format!("topo_{}_{}_{}", cls.id, i, child);
+                    //     let lhs = eps + 2.0;
+                    //     let constraint = con!(cons_name: lhs <= 1.0 cls_topo_idx + (-1.0) child_topo_idx);
+                    //     problem.add_constraint(constraint).unwrap();
+                    // }
                 }
             }
+            // problem.add_constraint(normalization_constraint).unwrap();
         }
         problem.set_objective_type(ObjectiveType::Minimize).unwrap();
         Self {
@@ -422,6 +454,22 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
             model: problem,
             vars,
             fallback,
+            cycles,
+        }
+    }
+
+    /// Get the solution value to the LP problem in f64
+    pub fn get_solution_value(&self, solution: &Solution, var_idx: usize) -> f64 {
+        match solution.variables[var_idx] {
+            VariableValue::Continuous(val) => val,
+            VariableValue::Binary(val) => {
+                if val {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            _ => panic!("Expected continuous variable"),
         }
     }
 
@@ -433,37 +481,80 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
         eclass: Id,
         rec_expr: &mut RecExpr<L>,
         memo: &mut HashMap<Id, Id>,
-    ) -> Id {
+        vis: &mut HashSet<Id>,
+    ) -> (Id, bool) {
         let id = self.egraph.find(eclass);
+        if vis.contains(&id) && !memo.contains_key(&id) {
+            return (id, true);
+        }
+        vis.insert(id);
         match memo.get(&id) {
-            Some(id) => *id,
+            Some(id) => return (*id, false),
             None => {
                 // figure out which node to pick
                 let cls = &self.egraph[id];
                 let mut picked = -1;
-                for (i, node_idx) in self.vars[&id].nodes.iter().enumerate() {
-                    let val = match solution.variables[*node_idx] {
-                        VariableValue::Continuous(val) => val,
-                        _ => panic!("Expected continuous variable"),
-                    };
-                    if val > 0.0 {
+                let mut running_set = self.vars[&id]
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, idx)| self.get_solution_value(solution, **idx) > 0.0)
+                    .map(|(i, idx)| (i, *idx))
+                    .collect::<HashSet<_>>();
+                // Iteratively try picked node
+                // if there is a node such that picking it
+                // does not form a cycle, then we pick it (with probability given by the LP solution)
+                println!("Picking node from {:?} for {}", running_set, id);
+                loop {
+                    if running_set.len() == 0 {
+                        return (id, true);
+                    }
+                    let total = running_set
+                        .iter()
+                        .map(|(_, idx)| self.get_solution_value(solution, *idx))
+                        .sum::<f64>();
+                    let mut blacklist = HashSet::default();
+                    for (i, node_idx) in running_set.iter() {
+                        let norm = self.get_solution_value(solution, *node_idx) / total;
                         if picked < 0 {
-                            picked = i as i32;
+                            picked = *i as i32;
                         } else {
                             let threshold: f64 = thread_rng().gen_range(0.0..=1.0);
-                            if threshold >= val {
-                                picked = i as i32;
+                            if threshold >= norm {
+                                picked = *i as i32;
                             }
                         }
+                        let mut contains_cycle = false;
+                        let mut children_new_ids = HashMap::default();
+                        for child in cls.nodes[*i].children() {
+                            let (new_id, has_cycle) =
+                                self.construct_expr(solution, *child, rec_expr, memo, vis);
+                            if has_cycle {
+                                blacklist.insert((*i, *node_idx));
+                                contains_cycle = true;
+                                break;
+                            } else {
+                                children_new_ids.insert(child.clone(), new_id);
+                            }
+                        }
+                        if contains_cycle {
+                            for k in children_new_ids.values() {
+                                memo.remove(k);
+                            }
+                            for child in cls.nodes[*i].children() {
+                                vis.remove(child);
+                            }
+                            break;
+                        } else {
+                            let mut new_expr = cls.nodes[*i].clone();
+                            new_expr.update_children(|id| children_new_ids[&id]);
+                            let new_id = rec_expr.add(new_expr);
+                            memo.insert(id, new_id);
+                            return (new_id, false);
+                        }
                     }
+                    running_set = running_set.difference(&blacklist).cloned().collect();
                 }
-                assert!(picked >= 0, "No node picked for class: {}", id);
-                let node = &cls.nodes[picked as usize]
-                    .clone()
-                    .map_children(|child| self.construct_expr(solution, child, rec_expr, memo));
-                let new_id = rec_expr.add(node.clone());
-                assert!(memo.insert(id, new_id).is_none());
-                new_id
             }
         }
     }
@@ -486,11 +577,16 @@ impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for FractionalExtra
             constraint.add_wvar(WeightedVariable::new_idx(*node, 1.0));
         }
         self.model.add_constraint(constraint).unwrap();
-        let solution = self.model.solve_as(ProblemType::Linear);
+        let solution = self.model.solve_as(ProblemType::MixedInteger);
+        // print!("Solution: {:?}", solution);
         if let Ok(sol) = solution {
+            for root_node in root_var.nodes.iter() {
+                println!("Root node: {:?}", sol.variables[*root_node]);
+            }
             let mut rec_expr = RecExpr::default();
             let mut memo = HashMap::default();
-            let _ = self.construct_expr(&sol, root, &mut rec_expr, &mut memo);
+            let mut vis = HashSet::default();
+            let _ = self.construct_expr(&sol, root, &mut rec_expr, &mut memo, &mut vis);
             rec_expr
         } else {
             panic!("Failed to solve the problem: {}", solution.err().unwrap());
