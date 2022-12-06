@@ -11,6 +11,9 @@ define_language! {
         "var" = Var(Id),
 
         "+" = Add([Id; 2]),
+        "-" = Minus([Id; 2]),
+        "*" = Mult([Id; 2]),
+        "/" = Div([Id; 2]),
         "=" = Eq([Id; 2]),
 
         "app" = App([Id; 2]),
@@ -137,6 +140,10 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
             if ConditionEqual::parse("(let ?x ?e ?then)", "(let ?x ?e ?else)")),
         rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
+        rw!("mult-comm"; "(* ?a ?b)" => "(* ?b ?a)"),
+        rw!("mult-assoc"; "(* (* ?a ?b) ?c)" => "(* ?a (* ?b ?c))"),
+        rw!("mult-dist"; "(* (+ ?a ?b) ?c)" => "(+ (* ?a ?c) (* ?b ?c))"),
+        rw!("div-dist"; "(/ (+ ?a ?b) ?c)" => "(+ (/ ?a ?c) (/ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
         // subst rules
         rw!("fix";      "(fix ?v ?e)"             => "(let ?v (fix ?v ?e) ?e)"),
@@ -321,15 +328,14 @@ fn test_fractional_extract() {
     struct AstDepthLp;
     impl LpCostFunction<Lambda, LambdaAnalysis> for AstDepthLp {
         fn node_cost(&mut self, egraph: &EGraph, eclass: Id, enode: &Lambda) -> f64 {
-            1.0 
+            1.0
             // + enode.fold(0.0, |max, e| {
             //     let min_child_depth = egraph[e].nodes.iter().fold(f64::MAX, |min, n| min.min(self.node_cost(egraph, eclass, n)));
             //     f64::max(max, min_child_depth)
             // })
         }
     }
-    let input_expr: RecExpr<_> = 
-        "(let compose (lam f (lam g (lam x (app (var f)
+    let input_expr: RecExpr<_> = "(let compose (lam f (lam g (lam x (app (var f)
                                        (app (var g) (var x))))))
      (let add1 (lam y (+ (var y) 1))
      (app (app (var compose) (var add1))
@@ -338,7 +344,9 @@ fn test_fractional_extract() {
                     (app (app (var compose) (var add1))
                          (app (app (var compose) (var add1))
                               (app (app (var compose) (var add1))
-                                   (var add1)))))))))".parse().unwrap();
+                                   (var add1)))))))))"
+        .parse()
+        .unwrap();
     let mut egraph = EGraph::default();
     let root_id = egraph.add_expr(&input_expr);
     let rules = rules();
@@ -347,11 +355,16 @@ fn test_fractional_extract() {
         .with_egraph(egraph)
         .with_iter_limit(60)
         .with_node_limit(150_000)
-        .with_time_limit(std::time::Duration::from_secs(20)).run(&rules);
+        .with_time_limit(std::time::Duration::from_secs(20))
+        .run(&rules);
     // runner.print_report();
-    let mut lp_extractor = LpExtractor::new(&runner.egraph, AstDepthLp, true);
-    println!("INFO:::::::: Solve for root: {}", root_id);
-    let expr = lp_extractor.solve(runner.egraph.find(root_id));
+    // let mut lp_extractor = LpExtractor::new(&runner.egraph, AstDepthLp, true);
+    // println!("INFO:::::::: Solve for root: {}", root_id);
+    // let expr = lp_extractor.solve(runner.egraph.find(root_id));
+    // println!("expr: {}", expr);
+    let env = rplex::Env::new().unwrap();
+    let mut fractional_extractor = FractionalExtractor::new(&runner.egraph, &env, AstDepthLp, true, false);
+    let expr = fractional_extractor.solve(runner.egraph.find(root_id));
     println!("expr: {}", expr);
 }
 
