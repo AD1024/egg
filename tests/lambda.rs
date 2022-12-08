@@ -363,7 +363,8 @@ fn test_fractional_extract() {
     // let expr = lp_extractor.solve(runner.egraph.find(root_id));
     // println!("expr: {}", expr);
     let env = rplex::Env::new().unwrap();
-    let mut fractional_extractor = FractionalExtractor::new(&runner.egraph, &env, AstDepthLp, true, false);
+    let mut fractional_extractor =
+        FractionalExtractor::new(&runner.egraph, &env, AstDepthLp, true, false);
     let expr = fractional_extractor.solve(runner.egraph.find(root_id));
     println!("expr: {}", expr);
 }
