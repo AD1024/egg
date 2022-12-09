@@ -171,7 +171,6 @@ where
                 if cycles.contains(&(id, i)) {
                     model.set_col_upper(node_active, 0.0);
                     model.set_col_lower(node_active, 0.0);
-                    println!("Id: {} node: {} is in a cycle (total: {})", id, i, egraph[id].len());
                     continue;
                 }
 
@@ -205,7 +204,7 @@ where
             model,
             vars,
             fractional_extract: fractional,
-            cycle: cycles
+            cycle: cycles,
         }
     }
 
@@ -300,14 +299,6 @@ where
                 ids.insert(id, new_id);
                 todo.pop();
             } else {
-                println!("Node of {} in cycle: {}", id, self.cycle.contains(&(id, node_idx)));
-                for child in node.children() {
-                    println!(
-                        "child {} active: {}",
-                        child,
-                        solution.col(self.vars[&child].active)
-                    );
-                }
                 todo.extend_from_slice(node.children())
             }
         }
@@ -386,15 +377,37 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
             })
             .collect::<HashMap<_, _>>();
 
+        let mut cycles: HashSet<(Id, usize)> = HashSet::default();
+        find_cycles(egraph, |id, i| {
+            cycles.insert((id, i));
+        });
+
         // Constraint:
         // if a node is active, then at least one of the nodes in each child class is active
         for cls in egraph.classes() {
+            if (0..cls.nodes.len()).all(|i| cycles.contains(&(cls.id, i))) {
+                panic!(
+                    "All nodes in class {} are in a cycle: {:?}",
+                    cls.id, cls.nodes
+                );
+            }
+            // let normalization_cons = rplex::Constraint::new(ConstraintType::GreaterThanEq, 1.0, format!("normalization_{}", cls.id));
             for (i, node) in cls.nodes.iter().enumerate() {
+                if !fallback {
+                    if cycles.contains(&(cls.id, i)) {
+                        let cons_name = format!("elim_cycle_{}_{}", cls.id, i);
+                        let node_var_idx = vars[&cls.id].nodes[i];
+                        problem
+                            .add_constraint(con!(cons_name: 0.0 = 1.0 node_var_idx))
+                            .unwrap();
+                        continue;
+                    }
+                }
                 let node_var_idx = vars[&cls.id].nodes[i];
                 for child in node.children() {
                     let cons_name = format!("child_active_{}_{}_{}", cls.id, i, child);
-                    let child = egraph.find(*child);
-                    let child_var = &vars[&child];
+                    // let child = egraph.find(*child);
+                    let child_var = &vars[child];
                     let mut constraint =
                         rplex::Constraint::new(ConstraintType::GreaterThanEq, 0.0, cons_name);
                     constraint.add_wvar(WeightedVariable::new_idx(node_var_idx, -1.0));
@@ -444,14 +457,21 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
                 for (i, node_idx) in self.vars[&id].nodes.iter().enumerate() {
                     let val = match solution.variables[*node_idx] {
                         VariableValue::Continuous(val) => val,
-                        _ => panic!("Expected continuous variable"),
+                        VariableValue::Binary(val) => {
+                            if val {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        _ => panic!("Unexpected variable value type"),
                     };
                     if val > 0.0 {
                         if picked < 0 {
                             picked = i as i32;
                         } else {
                             let threshold: f64 = thread_rng().gen_range(0.0..=1.0);
-                            if threshold >= val {
+                            if threshold <= val {
                                 picked = i as i32;
                             }
                         }
@@ -486,7 +506,11 @@ impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for FractionalExtra
             constraint.add_wvar(WeightedVariable::new_idx(*node, 1.0));
         }
         self.model.add_constraint(constraint).unwrap();
-        let solution = self.model.solve_as(ProblemType::Linear);
+        let solution = self.model.solve_as(if self.fallback {
+            ProblemType::MixedInteger
+        } else {
+            ProblemType::Linear
+        });
         if let Ok(sol) = solution {
             let mut rec_expr = RecExpr::default();
             let mut memo = HashMap::default();
