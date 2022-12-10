@@ -527,38 +527,48 @@ impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for FractionalExtra
     }
 }
 
-fn find_cycles<L, N>(egraph: &EGraph<L, N>, mut f: impl FnMut(Id, usize))
+fn find_cycles<L, N>(egraph: &EGraph<L, N>, root: (id, usize), mut f: impl FnMut(Id, usize)) -> HashMap<Id, i32> //returns bfs_index
 where
     L: Language,
     N: Analysis<L>,
 {
     enum Color {
         White,
-        Gray,
         Black,
     }
-    type Enter = bool;
 
-    let mut color: HashMap<Id, Color> = egraph.classes().map(|c| (c.id, Color::White)).collect();
-    let mut stack: Vec<(Enter, Id)> = egraph.classes().map(|c| (true, c.id)).collect();
+    let mut color: HashMap<Id, Color> = egraph.classes().map(|c| (c.id, Color::White)).collect(); //contains reverse edges
+    *color.get_mut(&id).unwrap() = Color::Black;
+    
+    let mut stack: Vec<Id> = [root];
 
-    while let Some((enter, id)) = stack.pop() {
-        if enter {
-            *color.get_mut(&id).unwrap() = Color::Gray;
+    let mut count: i32 = 0;
+    let mut bfs_index: HashMap<Id, i32> = egraph.classes().map(|c| (c.id, -1)).collect();
+
+    while let Some(id) = stack.pop() {
+        // if enter {
+            // *color.get_mut(&id).unwrap() = Color::Gray;
             stack.push((false, id));
+            count += 1;
+            *bfs_index.get_mut(&id).unwrap() = count;
+
             for (i, node) in egraph[id].iter().enumerate() {
                 for child in node.children() {
                     match &color[child] {
-                        Color::White => stack.push((true, *child)),
-                        Color::Gray => f(id, i),
-                        Color::Black => (),
+                        Color::White => {
+                            stack.push((true, *child))
+                            *color.get_mut(&child).unwrap() = Color::Black;
+                        },
+                        Color::Black => f(id, i),
                     }
                 }
             }
-        } else {
-            *color.get_mut(&id).unwrap() = Color::Black;
-        }
+        // } else {
+        //     *color.get_mut(&id).unwrap() = Color::Black;
+        // }
     }
+
+    bfs_index
 }
 
 #[cfg(test)]
