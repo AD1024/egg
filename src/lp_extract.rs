@@ -4,7 +4,8 @@ use coin_cbc::{Col, Model, Sense};
 use rplex::*;
 
 use crate::*;
-use rand::{thread_rng, Rng};
+use rand::prelude::*;
+use rand::{distributions::WeightedIndex, thread_rng, Rng};
 
 /// A cost function to be used by an [`LpExtractor`].
 #[cfg_attr(docsrs, doc(cfg(feature = "lp")))]
@@ -64,9 +65,10 @@ pub struct LpExtractor<'a, L: Language, N: Analysis<L>> {
     fractional_extract: bool,
 }
 
-pub struct FractionalExtractor<'a, L: Language, N: Analysis<L>> {
+pub struct FractionalExtractor<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> {
     egraph: &'a EGraph<L, N>,
     model: Problem<'a>,
+    costs: CF,
     vars: HashMap<Id, FractionalClassVar>,
     fallback: bool,
 }
@@ -325,19 +327,17 @@ impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for LpExtractor<'a,
     }
 }
 
-impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
+impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> FractionalExtractor<'a, L, N, CF> {
     /// Create a fractional extraction problem
-    pub fn new<CF>(
+    pub fn new(
         egraph: &'a EGraph<L, N>,
         env: &'a rplex::Env,
         mut cost_function: CF,
+        blacklist_fn: impl Fn(Id, L) -> bool,
         order_var: bool,
         fallback: bool,
-    ) -> Self
-    where
-        CF: LpCostFunction<L, N>,
-    {
-        let max_order = (egraph.total_size() * 5) as f64;
+    ) -> Self {
+        let max_order = (egraph.total_number_of_nodes() * 10) as f64;
         let eps = 1.0 / (max_order * 2.0);
         let mut problem = rplex::Problem::new(env, "fractional_ext").unwrap();
         let vars = egraph
@@ -361,7 +361,7 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
                         let node_cost = cost_function.node_cost(egraph, cls.id, node);
                         let node_active_var = problem
                             .add_variable(
-                                var!(0.0 <= node_active <= 1.0 -> node_cost as variable_type),
+                                var!(0.0 <= node_active <= max_order -> node_cost as variable_type),
                             )
                             .unwrap();
                         node_active_var
@@ -385,25 +385,29 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
         // Constraint:
         // if a node is active, then at least one of the nodes in each child class is active
         for cls in egraph.classes() {
-            if (0..cls.nodes.len()).all(|i| cycles.contains(&(cls.id, i))) {
-                panic!(
-                    "All nodes in class {} are in a cycle: {:?}",
-                    cls.id, cls.nodes
-                );
-            }
-            // let normalization_cons = rplex::Constraint::new(ConstraintType::GreaterThanEq, 1.0, format!("normalization_{}", cls.id));
+            // let mut normalization_cons = rplex::Constraint::new(ConstraintType::GreaterThanEq, 1.0, format!("normalization_{}", cls.id));
             for (i, node) in cls.nodes.iter().enumerate() {
-                if !fallback {
-                    if cycles.contains(&(cls.id, i)) {
-                        let cons_name = format!("elim_cycle_{}_{}", cls.id, i);
-                        let node_var_idx = vars[&cls.id].nodes[i];
-                        problem
-                            .add_constraint(con!(cons_name: 0.0 = 1.0 node_var_idx))
-                            .unwrap();
-                        continue;
-                    }
-                }
+                // if !fallback {
+                //     if cycles.contains(&(cls.id, i)) {
+                //         let cons_name = format!("elim_cycle_{}_{}", cls.id, i);
+                //         let node_var_idx = vars[&cls.id].nodes[i];
+                //         problem
+                //             .add_constraint(con!(cons_name: 0.0 = 1.0 node_var_idx))
+                //             .unwrap();
+                //         continue;
+                //     }
+                // }
+                // if blacklist_fn(cls.id, node.clone()) {
+                //     println!("blacklisting {} {:?}", cls.id, node);
+                //     let cons_name = format!("blacklist_{}_{}", cls.id, i);
+                //     let node_var_idx = vars[&cls.id].nodes[i];
+                //     problem
+                //         .add_constraint(con!(cons_name: 0.0 = 1.0 node_var_idx))
+                //         .unwrap();
+                //     continue;
+                // }
                 let node_var_idx = vars[&cls.id].nodes[i];
+                // normalization_cons.add_wvar(WeightedVariable::new_idx(node_var_idx, 1.0));
                 for child in node.children() {
                     let cons_name = format!("child_active_{}_{}_{}", cls.id, i, child);
                     // let child = egraph.find(*child);
@@ -415,25 +419,27 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
                         constraint.add_wvar(WeightedVariable::new_idx(*child_node, 1.0));
                     }
                     problem.add_constraint(constraint).unwrap();
-                    if order_var {
-                        // topo_var(cls) - topo_var(child) - eps + 2 * (1 - node_var) >= 0
-                        // ==> topo_var(cls) - topo_var(child) - eps + 2 - 2 * node_var >= 0
-                        // ==> topo_var(cls) - topo_var(child) - 2 * node_var >= eps - 2
-                        let cls_topo_idx = vars[&cls.id].topo;
-                        let child_topo_idx = vars[&child].topo;
-                        let cons_name = format!("topo_{}_{}_{}", cls.id, i, child);
-                        let lhs = eps - 2.0;
-                        let constraint = con!(cons_name: lhs <= 1.0 cls_topo_idx + (-1.0) child_topo_idx + (-2.0) node_var_idx);
-                        problem.add_constraint(constraint).unwrap();
-                    }
+                    // if order_var {
+                    //     // topo_var(cls) - topo_var(child) - eps + 2 * (1 - node_var) >= 0
+                    //     // ==> topo_var(cls) - topo_var(child) - eps + 2 - 2 * node_var >= 0
+                    //     // ==> topo_var(cls) - topo_var(child) - 2 * node_var >= eps - 2
+                    //     let cls_topo_idx = vars[&cls.id].topo;
+                    //     let child_topo_idx = vars[&child].topo;
+                    //     let cons_name = format!("topo_{}_{}_{}", cls.id, i, child);
+                    //     let lhs = eps - 2.0;
+                    //     let constraint = con!(cons_name: lhs <= 1.0 cls_topo_idx + (-1.0) child_topo_idx + (-2.0) node_var_idx);
+                    //     problem.add_constraint(constraint).unwrap();
+                    // }
                 }
             }
+            // problem.add_constraint(normalization_cons).unwrap();
         }
         problem.set_objective_type(ObjectiveType::Minimize).unwrap();
         Self {
             egraph,
             model: problem,
             vars,
+            costs: cost_function,
             fallback,
         }
     }
@@ -441,11 +447,12 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
     /// Borrowed and modified from Tensat
     /// Extract an expression using the LP solution
     pub fn construct_expr(
-        &self,
+        &mut self,
         solution: &Solution,
         eclass: Id,
         rec_expr: &mut RecExpr<L>,
         memo: &mut HashMap<Id, Id>,
+        expr_cost: &mut f64,
     ) -> Id {
         let id = self.egraph.find(eclass);
         match memo.get(&id) {
@@ -453,9 +460,10 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
             None => {
                 // figure out which node to pick
                 let cls = &self.egraph[id];
-                let mut picked = -1;
-                for (i, node_idx) in self.vars[&id].nodes.iter().enumerate() {
-                    let val = match solution.variables[*node_idx] {
+                let total: f64 = self.vars[&id]
+                    .nodes
+                    .iter()
+                    .map(|node_idx| match solution.variables[*node_idx] {
                         VariableValue::Continuous(val) => val,
                         VariableValue::Binary(val) => {
                             if val {
@@ -465,22 +473,37 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
                             }
                         }
                         _ => panic!("Unexpected variable value type"),
-                    };
-                    if val > 0.0 {
-                        if picked < 0 {
-                            picked = i as i32;
-                        } else {
-                            let threshold: f64 = thread_rng().gen_range(0.0..=1.0);
-                            if threshold <= val {
-                                picked = i as i32;
-                            }
-                        }
-                    }
-                }
-                assert!(picked >= 0, "No node picked for class: {}", id);
-                let node = &cls.nodes[picked as usize]
-                    .clone()
-                    .map_children(|child| self.construct_expr(solution, child, rec_expr, memo));
+                    })
+                    .sum();
+                let choices = self.vars[&id]
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, node_idx)| {
+                        (
+                            i,
+                            match solution.variables[*node_idx] {
+                                VariableValue::Continuous(val) => val / total,
+                                VariableValue::Binary(val) => (if val { 1.0 } else { 0.0 }) / total,
+                                _ => panic!("Unexpected variable value type"),
+                            },
+                        )
+                    })
+                    .filter(|(_, val)| *val > 0.0)
+                    .collect::<Vec<(usize, f64)>>();
+                let distribution =
+                    WeightedIndex::new(choices.iter().map(|(_, val)| *val as f32)).unwrap();
+                let picked = choices[distribution.sample(&mut rand::thread_rng())].0;
+                // println!("=====Decide for {}\nChoices: {:?}\nChosen: {}", id, choices, picked);
+                // println!("Costs: {:?}", choices.iter().map(|(i, _)| self.costs.node_cost(&self.egraph, id, &self.egraph[id].nodes[*i])).collect::<Vec<f64>>());
+                assert!(choices.len() > 0, "No node picked for class: {}", id);
+                // println!("Picked for eclass {} node {:?}", id, self.egraph[id].nodes[picked as usize]);
+                *expr_cost +=
+                    self.costs
+                        .node_cost(&self.egraph, id, &self.egraph[id].nodes[picked]);
+                let node = &cls.nodes[picked as usize].clone().map_children(|child| {
+                    self.construct_expr(solution, child, rec_expr, memo, expr_cost)
+                });
                 let new_id = rec_expr.add(node.clone());
                 assert!(memo.insert(id, new_id).is_none());
                 new_id
@@ -489,7 +512,9 @@ impl<'a, L: Language, N: Analysis<L>> FractionalExtractor<'a, L, N> {
     }
 }
 
-impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for FractionalExtractor<'a, L, N> {
+impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> LpExtractorTrait<L, N>
+    for FractionalExtractor<'a, L, N, CF>
+{
     fn set_timeout(&mut self, _: u64) -> &mut Self {
         self
     }
@@ -499,7 +524,11 @@ impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for FractionalExtra
         let root_var = &self.vars[&root];
         let mut constraint = rplex::Constraint::new(
             ConstraintType::GreaterThanEq,
-            1.0,
+            if self.fallback {
+                1.0
+            } else {
+                (self.egraph.total_number_of_nodes() * 10) as f64
+            },
             format!("root_constraint_{}", root),
         );
         for node in &root_var.nodes {
@@ -513,8 +542,11 @@ impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for FractionalExtra
         });
         if let Ok(sol) = solution {
             let mut rec_expr = RecExpr::default();
+            println!("Objective: {:?}", sol.objective);
             let mut memo = HashMap::default();
-            let _ = self.construct_expr(&sol, root, &mut rec_expr, &mut memo);
+            let mut expr_cost = 0.0;
+            let _ = self.construct_expr(&sol, root, &mut rec_expr, &mut memo, &mut expr_cost);
+            println!("Cost: {}", expr_cost);
             rec_expr
         } else {
             panic!("Failed to solve the problem: {}", solution.err().unwrap());
