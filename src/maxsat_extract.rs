@@ -1,4 +1,6 @@
-use crate::{Analysis, EGraph, HashMap, HashSet, Id, Language};
+use std::process::Command;
+
+use crate::{Analysis, EGraph, HashMap, HashSet, Id, Language, RecExpr};
 
 /// Get all cycles in the given E-Graph
 pub fn get_cycles<L, N>(
@@ -80,8 +82,88 @@ pub struct MaxsatExtractor<'a, L: Language, N: Analysis<L>> {
 pub struct WeightedPartialMaxsatProblem<'a, L: Language, N: Analysis<L>> {
     // pub class_vars: HashMap<Id, i32>,
     pub node_vars: HashMap<L, usize>,
+    pub root: Id,
     pub egraph: &'a EGraph<L, N>,
     pub problem_path: String,
+}
+
+impl<'a, L, N> WeightedPartialMaxsatProblem<'a, L, N>
+where
+    L: Language,
+    N: Analysis<L>,
+{
+    /// Given a weighted partial maxsat problem, solve the problem
+    /// and parse the output
+    pub fn solve(&self, problem: &WeightedPartialMaxsatProblem<'a, L, N>) {
+        // assume maxhs installed
+        let result = Command::new("maxhs")
+            .arg(problem.problem_path.clone())
+            .output();
+        if let Ok(output) = result {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let lines = stdout.lines();
+            let (mut comments, mut opt_line, mut sol_line) = (vec![], vec![], vec![]);
+            for l in lines {
+                let mut line = l.split(" ");
+                if let Some(indicator) = line.next() {
+                    match indicator {
+                        "c" => comments.push(line.collect::<Vec<_>>().join(" ")),
+                        "o" => opt_line.push(line.collect::<Vec<_>>().join(" ")),
+                        "s" => sol_line.push(line.collect::<Vec<_>>().join(" ")),
+                        _ => (),
+                    }
+                }
+            }
+            // parse opt
+            if opt_line.len() > 0 {
+                let opt = opt_line.iter().next().unwrap();
+                println!("Optimal: {}", opt)
+            }
+            assert!(sol_line.len() > 0, "Solution cannot be empty");
+            let sol = sol_line.iter().next().unwrap();
+            if sol.contains("UNSATISFIABLE") {
+                println!("Problem UNSAT")
+            } else {
+                let sat_map = sol
+                    .chars()
+                    .enumerate()
+                    .filter(|(_, res)| *res == '1')
+                    .map(|(car, _)| car)
+                    .collect::<HashSet<_>>();
+                let mut worklist = Vec::new();
+                let mut expr = RecExpr::default();
+                let id_map = HashMap::default();
+                worklist.push(self.root);
+                while let Some(id) = worklist.last() {
+                    if id_map.contains_key(id) {
+                        worklist.pop();
+                        continue;
+                    }
+                    for n in self.egraph[*id].nodes {
+                        if sat_map.contains(&self.node_vars[&n]) {
+                            if n.all(|ch| id_map.contains_key(&ch)) {
+                                let new_id = expr.add(
+                                    n.clone().map_children(|ch| id_map[&self.egraph.find(ch)]),
+                                );
+                                id_map[id] = new_id;
+                                worklist.pop();
+                            } else {
+                                worklist.extend_from_slice(n.children());
+                            }
+                            break;
+                        }
+                    }
+                    panic!("No active node for eclass: {}", id);
+                }
+            }
+        } else {
+            panic!(
+                "Unable to solve {}, err: {}",
+                problem.problem_path,
+                result.err().unwrap()
+            );
+        }
+    }
 }
 
 pub trait MaxsatCostFunction<L: Language, N: Analysis<L>> {
@@ -212,6 +294,7 @@ where
 
         WeightedPartialMaxsatProblem {
             node_vars,
+            root,
             egraph: self.egraph,
             problem_path: self.writer.path.clone(),
         }
