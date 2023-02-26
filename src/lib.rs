@@ -46,6 +46,7 @@ mod language;
 #[cfg(feature = "lp")]
 mod lp_extract;
 mod machine;
+pub mod maxsat_extract;
 mod multipattern;
 mod pattern;
 mod rewrite;

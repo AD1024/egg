@@ -319,6 +319,70 @@ egg::test_fn! {
     "(lam ?x (+ (var ?x) 2))"
 }
 
+#[test]
+fn test_maxsat_extract() {
+    use crate::maxsat_extract::*;
+    use std::env;
+
+    struct CostFn;
+    impl MaxsatCostFunction<Lambda, LambdaAnalysis> for CostFn {
+        fn node_cost(&mut self, egraph: &EGraph, eclass: Id, enode: &Lambda) -> f64 {
+            1.0
+        }
+    }
+
+    // let input_expr: RecExpr<_> = "(let compose (lam f (lam g (lam x (app (var f)
+    //                                    (app (var g) (var x))))))
+    //  (let add1 (lam y (+ (var y) 1))
+    //  (app (app (var compose) (var add1))
+    //       (app (app (var compose) (var add1))
+    //            (app (app (var compose) (var add1))
+    //                 (app (app (var compose) (var add1))
+    //                      (app (app (var compose) (var add1))
+    //                           (app (app (var compose) (var add1))
+    //                                (var add1)))))))))".parse().unwrap();
+
+    let input_expr: RecExpr<Lambda> = "(let compose (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x))))))
+     (let repeat (fix repeat (lam fun (lam n
+        (if (= (var n) 0)
+            (lam i (var i))
+            (app (app (var compose) (var fun))
+                 (app (app (var repeat)
+                           (var fun))
+                      (+ (var n) -1)))))))
+     (let add1 (lam y (+ (var y) 1))
+     (app (app (var repeat)
+               (var add1))
+          2))))"
+        .parse()
+        .unwrap();
+
+    let mut egraph = EGraph::default();
+    let id = egraph.add_expr(&input_expr);
+    let runner = Runner::default()
+        .with_egraph(egraph)
+        .with_iter_limit(100)
+        .with_node_limit(10_000)
+        .with_time_limit(std::time::Duration::from_secs(10));
+
+    let runner = runner.run(&rules());
+    let egraph = runner.egraph;
+
+    let mut extractor = MaxsatExtractor::new(
+        &egraph,
+        String::from(
+            env::current_dir()
+                .unwrap()
+                .join("lambda_ext.wcnf")
+                .to_str()
+                .unwrap(),
+        ),
+    );
+
+    extractor.create_problem(id, "lambda extraction", true, CostFn);
+}
+
 #[cfg(feature = "lp")]
 #[test]
 fn test_fractional_extract() {
