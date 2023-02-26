@@ -132,20 +132,20 @@ where
                     .collect::<HashSet<_>>();
                 let mut worklist = Vec::new();
                 let mut expr = RecExpr::default();
-                let id_map = HashMap::default();
+                let mut id_map = HashMap::default();
                 worklist.push(self.root);
-                while let Some(id) = worklist.last() {
-                    if id_map.contains_key(id) {
+                while let Some(&id) = worklist.last() {
+                    if id_map.contains_key(&id) {
                         worklist.pop();
                         continue;
                     }
-                    for n in self.egraph[*id].nodes {
+                    for n in &self.egraph[id].nodes {
                         if sat_map.contains(&self.node_vars[&n]) {
                             if n.all(|ch| id_map.contains_key(&ch)) {
                                 let new_id = expr.add(
                                     n.clone().map_children(|ch| id_map[&self.egraph.find(ch)]),
                                 );
-                                id_map[id] = new_id;
+                                id_map.insert(id.clone(), new_id);
                                 worklist.pop();
                             } else {
                                 worklist.extend_from_slice(n.children());
@@ -153,7 +153,7 @@ where
                             break;
                         }
                     }
-                    panic!("No active node for eclass: {}", id);
+                    panic!("No active node for eclass: {}", id.clone());
                 }
             }
         } else {
