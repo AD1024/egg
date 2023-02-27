@@ -94,15 +94,17 @@ where
 {
     /// Given a weighted partial maxsat problem, solve the problem
     /// and parse the output
-    pub fn solve(&self, problem: &WeightedPartialMaxsatProblem<'a, L, N>) {
+    pub fn solve(&self) -> RecExpr<L> {
         // assume maxhs installed
         let result = Command::new("maxhs")
-            .arg(problem.problem_path.clone())
+            .arg("-printSoln")
+            .arg(self.problem_path.clone())
             .output();
         if let Ok(output) = result {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let lines = stdout.lines();
-            let (mut comments, mut opt_line, mut sol_line) = (vec![], vec![], vec![]);
+            let (mut comments, mut opt_line, mut sol_line, mut solution) =
+                (vec![], vec![], vec![], vec![]);
             for l in lines {
                 let mut line = l.split(" ");
                 if let Some(indicator) = line.next() {
@@ -110,6 +112,7 @@ where
                         "c" => comments.push(line.collect::<Vec<_>>().join(" ")),
                         "o" => opt_line.push(line.collect::<Vec<_>>().join(" ")),
                         "s" => sol_line.push(line.collect::<Vec<_>>().join(" ")),
+                        "v" => solution.push(line.collect::<Vec<_>>().join(" ")),
                         _ => (),
                     }
                 }
@@ -122,25 +125,35 @@ where
             assert!(sol_line.len() > 0, "Solution cannot be empty");
             let sol = sol_line.iter().next().unwrap();
             if sol.contains("UNSATISFIABLE") {
-                println!("Problem UNSAT")
+                panic!("Problem UNSAT")
             } else {
+                assert!(
+                    solution.len() > 0,
+                    "No solution line (try add -printSoln option to maxhs)"
+                );
+                let sol = solution.iter().next().unwrap();
+                println!("Sol: {}", sol);
                 let sat_map = sol
                     .chars()
                     .enumerate()
                     .filter(|(_, res)| *res == '1')
-                    .map(|(car, _)| car)
+                    .map(|(car, _)| car + 1)
                     .collect::<HashSet<_>>();
                 let mut worklist = Vec::new();
                 let mut expr = RecExpr::default();
                 let mut id_map = HashMap::default();
                 worklist.push(self.root);
+                println!("{:?}", sat_map);
                 while let Some(&id) = worklist.last() {
                     if id_map.contains_key(&id) {
                         worklist.pop();
                         continue;
                     }
+                    // println!("Current node ids: {:?}", &self.egraph[id].nodes.iter().map(|x| self.node_vars[x]).collect::<Vec<_>>());
+                    let mut not_found = true;
                     for n in &self.egraph[id].nodes {
                         if sat_map.contains(&self.node_vars[&n]) {
+                            not_found = false;
                             if n.all(|ch| id_map.contains_key(&ch)) {
                                 let new_id = expr.add(
                                     n.clone().map_children(|ch| id_map[&self.egraph.find(ch)]),
@@ -153,13 +166,16 @@ where
                             break;
                         }
                     }
-                    panic!("No active node for eclass: {}", id.clone());
+                    if not_found {
+                        panic!("No active node for eclass: {}", id.clone());
+                    }
                 }
+                return expr;
             }
         } else {
             panic!(
                 "Unable to solve {}, err: {}",
-                problem.problem_path,
+                self.problem_path,
                 result.err().unwrap()
             );
         }

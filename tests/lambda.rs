@@ -380,7 +380,8 @@ fn test_maxsat_extract() {
         ),
     );
 
-    extractor.create_problem(id, "lambda extraction", true, CostFn);
+    let problem = extractor.create_problem(id, "lambda extraction", true, CostFn);
+    println!("{:?}", problem.solve())
 }
 
 #[cfg(feature = "lp")]
