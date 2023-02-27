@@ -74,16 +74,23 @@ impl ProblemWriter {
     }
 }
 
+/// the Extractor that constructs the constraint problem
 pub struct MaxsatExtractor<'a, L: Language, N: Analysis<L>> {
+    /// EGraph to extract
     pub egraph: &'a EGraph<L, N>,
     writer: ProblemWriter,
 }
 
+/// A weighted partial maxsat problem
 pub struct WeightedPartialMaxsatProblem<'a, L: Language, N: Analysis<L>> {
     // pub class_vars: HashMap<Id, i32>,
+    /// a map from enodes to maxsat variables (starting from 1)
     pub node_vars: HashMap<L, usize>,
+    /// root eclass Id
     pub root: Id,
+    /// EGraph to extract
     pub egraph: &'a EGraph<L, N>,
+    /// path to the problem file
     pub problem_path: String,
 }
 
@@ -94,7 +101,7 @@ where
 {
     /// Given a weighted partial maxsat problem, solve the problem
     /// and parse the output
-    pub fn solve(&self) -> RecExpr<L> {
+    pub fn solve(&self) -> (Option<f64>, RecExpr<L>) {
         // assume maxhs installed
         let result = Command::new("maxhs")
             .arg("-printSoln")
@@ -117,11 +124,6 @@ where
                     }
                 }
             }
-            // parse opt
-            if opt_line.len() > 0 {
-                let opt = opt_line.iter().next().unwrap();
-                println!("Optimal: {}", opt)
-            }
             assert!(sol_line.len() > 0, "Solution cannot be empty");
             let sol = sol_line.iter().next().unwrap();
             if sol.contains("UNSATISFIABLE") {
@@ -132,7 +134,7 @@ where
                     "No solution line (try add -printSoln option to maxhs)"
                 );
                 let sol = solution.iter().next().unwrap();
-                println!("Sol: {}", sol);
+                // println!("Sol: {}", sol);
                 let sat_map = sol
                     .chars()
                     .enumerate()
@@ -143,7 +145,7 @@ where
                 let mut expr = RecExpr::default();
                 let mut id_map = HashMap::default();
                 worklist.push(self.root);
-                println!("{:?}", sat_map);
+                // println!("{:?}", sat_map);
                 while let Some(&id) = worklist.last() {
                     if id_map.contains_key(&id) {
                         worklist.pop();
@@ -170,7 +172,12 @@ where
                         panic!("No active node for eclass: {}", id.clone());
                     }
                 }
-                return expr;
+                // parse opt
+                if opt_line.len() > 0 {
+                    let opt = opt_line.iter().next().unwrap();
+                    return (Some(opt.parse::<f64>().unwrap()), expr);
+                }
+                return (None, expr);
             }
         } else {
             panic!(
@@ -182,6 +189,7 @@ where
     }
 }
 
+/// Cost function; same interface as `LpCostFunction`.
 pub trait MaxsatCostFunction<L: Language, N: Analysis<L>> {
     /// Returns the cost of the given e-node.
     ///

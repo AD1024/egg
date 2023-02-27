@@ -331,6 +331,16 @@ fn test_maxsat_extract() {
         }
     }
 
+    impl CostFunction<Lambda> for CostFn {
+        type Cost = f64;
+        fn cost<C>(&mut self, enode: &Lambda, mut costs: C) -> Self::Cost
+        where
+            C: FnMut(Id) -> Self::Cost,
+        {
+            enode.fold(1.0, |acc, n| acc + costs(n))
+        }
+    }
+
     // let input_expr: RecExpr<_> = "(let compose (lam f (lam g (lam x (app (var f)
     //                                    (app (var g) (var x))))))
     //  (let add1 (lam y (+ (var y) 1))
@@ -381,7 +391,14 @@ fn test_maxsat_extract() {
     );
 
     let problem = extractor.create_problem(id, "lambda extraction", true, CostFn);
-    println!("{:?}", problem.solve())
+    let (cost, expr) = problem.solve();
+    println!("cost: {:?}", cost);
+    println!("expr: {}", expr);
+
+    let greedy_ext = Extractor::new(&egraph, CostFn);
+    let (cost, expr) = greedy_ext.find_best(id);
+    println!("greedy cost: {:?}", cost);
+    println!("greedy expr: {}", expr);
 }
 
 #[cfg(feature = "lp")]
