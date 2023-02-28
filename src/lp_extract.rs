@@ -84,7 +84,7 @@ struct FractionalClassVar {
 /// Extractor trait
 pub trait LpExtractorTrait<L: Language, N: Analysis<L>> {
     /// Solve extraction for a single root
-    fn solve(&mut self, root: Id) -> RecExpr<L>;
+    fn solve(&mut self, root: Id) -> (u128, RecExpr<L>);
 
     /// Solve extraction for a set of roots
     fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>);
@@ -316,8 +316,8 @@ where
 }
 
 impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for LpExtractor<'a, L, N> {
-    fn solve(&mut self, root: Id) -> RecExpr<L> {
-        self.solve_multiple(&[root]).0
+    fn solve(&mut self, root: Id) -> (u128, RecExpr<L>) {
+        (0, self.solve_multiple(&[root]).0)
     }
 
     fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>) {
@@ -524,7 +524,7 @@ impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> LpExtractorTrait
         self
     }
 
-    fn solve(&mut self, root: Id) -> RecExpr<L> {
+    fn solve(&mut self, root: Id) -> (u128, RecExpr<L>) {
         let root = self.egraph.find(root);
         let root_var = &self.vars[&root];
         let mut constraint = rplex::Constraint::new(
@@ -540,11 +540,13 @@ impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> LpExtractorTrait
             constraint.add_wvar(WeightedVariable::new_idx(*node, 1.0));
         }
         self.model.add_constraint(constraint).unwrap();
+        let start = Instant::now();
         let solution = self.model.solve_as(if self.fallback {
             ProblemType::MixedInteger
         } else {
             ProblemType::Linear
         });
+        let elapsed = start.elapsed().as_millis();
         if let Ok(sol) = solution {
             let mut rec_expr = RecExpr::default();
             println!("Objective: {:?}", sol.objective);
@@ -585,7 +587,7 @@ impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> LpExtractorTrait
                     }
                 }
             } */
-            rec_expr
+            (elapsed, rec_expr)
         } else {
             panic!("Failed to solve the problem: {}", solution.err().unwrap());
         }
