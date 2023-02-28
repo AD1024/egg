@@ -61,10 +61,10 @@ pub fn get_all_cycles<L, N>(
         }
         // This is the fundamental flaw that was not captured
         // in Tensat's cycle detection algorithm:
-        // Even with coloring, nodes in the same eclass could share the same cycle by
+        // Even with coloring, nodes in the same eclass could share the same cycles by
         // sharing some common children.
-        // However these children e-class will not be visited after we finish
-        // cycle detection for the first node in the e-class, so we need to maintain
+        // However these children e-class will *not* be visited *again* after we finish
+        // cycle detection for the first node in the e-class (colored to 2), so we need to maintain
         // a map from the starting node to the cycles it is in, which will be used by
         // other nodes that are in the same e-class to construct the cycles that
         // they are not able to detect.
