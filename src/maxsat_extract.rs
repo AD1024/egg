@@ -3,6 +3,8 @@ use std::process::Command;
 use egg::{Analysis, EGraph, Id, Language, RecExpr, HashMap, HashSet};
 use std::time::Instant;
 
+
+// TODO: Is there a more efficient implementation?
 pub fn get_all_cycles<L, N>(
     egraph: &EGraph<L, N>,
     root: &Id,
