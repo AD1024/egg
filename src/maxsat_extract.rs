@@ -5,6 +5,7 @@ use std::time::Instant;
 
 
 // TODO: Is there a more efficient implementation?
+// TODO: ``JIT'' to MAX-SAT problem here.
 pub fn get_all_cycles<L, N>(
     egraph: &EGraph<L, N>,
     root: &Id,
