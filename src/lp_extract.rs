@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use coin_cbc::{Col, Model, Sense};
@@ -69,6 +70,8 @@ pub struct FractionalExtractor<'a, L: Language, N: Analysis<L>, CF: LpCostFuncti
     egraph: &'a EGraph<L, N>,
     model: Problem<'a>,
     costs: CF,
+    pub solved_objective: f64,
+    pub rounded_objective: f64,
     vars: HashMap<Id, FractionalClassVar>,
     fallback: bool,
 }
@@ -361,7 +364,7 @@ impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> FractionalExtrac
                         let node_cost = cost_function.node_cost(egraph, cls.id, node);
                         let node_active_var = problem
                             .add_variable(
-                                var!(0.0 <= node_active <= max_order -> node_cost as variable_type),
+                                var!(0.0 <= node_active <= 1.0 -> node_cost as variable_type),
                             )
                             .unwrap();
                         node_active_var
@@ -441,6 +444,8 @@ impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> FractionalExtrac
             vars,
             costs: cost_function,
             fallback,
+            solved_objective: 0.0,
+            rounded_objective: 0.0,
         }
     }
 
@@ -524,7 +529,7 @@ impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> LpExtractorTrait
         let root_var = &self.vars[&root];
         let mut constraint = rplex::Constraint::new(
             ConstraintType::GreaterThanEq,
-            if self.fallback {
+            if self.fallback || true {
                 1.0
             } else {
                 (self.egraph.total_number_of_nodes() * 10) as f64
@@ -543,10 +548,43 @@ impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> LpExtractorTrait
         if let Ok(sol) = solution {
             let mut rec_expr = RecExpr::default();
             println!("Objective: {:?}", sol.objective);
+            self.solved_objective = sol.objective;
             let mut memo = HashMap::default();
             let mut expr_cost = 0.0;
             let _ = self.construct_expr(&sol, root, &mut rec_expr, &mut memo, &mut expr_cost);
             println!("Cost: {}", expr_cost);
+            self.rounded_objective = expr_cost;
+            /*
+            println!("Solution mapping:");
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::default();
+            visited.insert(root);
+            queue.push_back(root);
+            while !queue.is_empty() {
+                let front = queue.pop_front().unwrap();
+                let front_var = &self.vars[&front];
+                println!("EClass {}:", front);
+                println!("\tSolutions: {:?}", front_var.nodes.iter().map(|node_idx| match sol.variables[*node_idx] {
+                    VariableValue::Continuous(val) => val,
+                    VariableValue::Binary(val) => {
+                        if val {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    _ => panic!("Unexpected variable value type"),
+                }).collect::<Vec<f64>>());
+                println!("\tCosts: {:?}", self.egraph[front].nodes.iter().map(|node| self.costs.node_cost(&self.egraph, front, node)).collect::<Vec<f64>>());
+                for n in &self.egraph[front].nodes {
+                    for child in n.children() {
+                        if !visited.contains(child) {
+                            visited.insert(*child);
+                            queue.push_back(*child);
+                        }
+                    }
+                }
+            } */
             rec_expr
         } else {
             panic!("Failed to solve the problem: {}", solution.err().unwrap());
