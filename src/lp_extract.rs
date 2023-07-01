@@ -1,11 +1,6 @@
-use std::sync::Arc;
-
 use coin_cbc::{Col, Model, Sense};
-use rplex::*;
 
 use crate::*;
-use rand::prelude::*;
-use rand::{distributions::WeightedIndex, thread_rng, Rng};
 
 /// A cost function to be used by an [`LpExtractor`].
 #[cfg_attr(docsrs, doc(cfg(feature = "lp")))]
@@ -61,33 +56,6 @@ pub struct LpExtractor<'a, L: Language, N: Analysis<L>> {
     egraph: &'a EGraph<L, N>,
     model: Model,
     vars: HashMap<Id, ClassVars>,
-    cycle: HashSet<(Id, usize)>,
-    fractional_extract: bool,
-}
-
-pub struct FractionalExtractor<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> {
-    egraph: &'a EGraph<L, N>,
-    model: Problem<'a>,
-    costs: CF,
-    vars: HashMap<Id, FractionalClassVar>,
-    fallback: bool,
-}
-
-struct FractionalClassVar {
-    topo: usize,
-    nodes: Vec<usize>,
-}
-
-/// Extractor trait
-pub trait LpExtractorTrait<L: Language, N: Analysis<L>> {
-    /// Solve extraction for a single root
-    fn solve(&mut self, root: Id) -> RecExpr<L>;
-
-    /// Solve extraction for a set of roots
-    fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>);
-
-    /// Timeouts
-    fn set_timeout(&mut self, timeout: u64) -> &mut Self;
 }
 
 struct ClassVars {
@@ -103,12 +71,11 @@ where
 {
     /// Create an [`LpExtractor`] using costs from the given [`LpCostFunction`].
     /// See those docs for details.
-    pub fn new<CF>(egraph: &'a EGraph<L, N>, mut cost_function: CF, fractional: bool) -> Self
+    pub fn new<CF>(egraph: &'a EGraph<L, N>, mut cost_function: CF) -> Self
     where
         CF: LpCostFunction<L, N>,
     {
         let max_order = egraph.total_number_of_nodes() as f64 * 10.0;
-        println!("Fractional: {}", fractional);
 
         let mut model = Model::default();
 
@@ -116,23 +83,9 @@ where
             .classes()
             .map(|class| {
                 let cvars = ClassVars {
-                    active: if fractional {
-                        model.add_col()
-                    } else {
-                        model.add_binary()
-                    },
+                    active: model.add_binary(),
                     order: model.add_col(),
-                    nodes: class
-                        .nodes
-                        .iter()
-                        .map(|_| {
-                            if fractional {
-                                model.add_col()
-                            } else {
-                                model.add_binary()
-                            }
-                        })
-                        .collect(),
+                    nodes: class.nodes.iter().map(|_| model.add_binary()).collect(),
                 };
                 model.set_col_upper(cvars.order, max_order);
                 (class.id, cvars)
@@ -145,28 +98,13 @@ where
         });
 
         for (&id, class) in &vars {
-            // class active maximum to 1.0
-            // let row = model.add_row();
-            // model.set_row_upper(row, 1.0);
-            // model.set_weight(row, class.active, 1.0);
-
             // class active == some node active
             // sum(for node_active in class) == class_active
             let row = model.add_row();
-            model.set_row_lower(row, 0.0);
+            model.set_row_equal(row, 0.0);
             model.set_weight(row, class.active, -1.0);
             for &node_active in &class.nodes {
                 model.set_weight(row, node_active, 1.0);
-            }
-
-            if (0..egraph[id].len()).all(|i| cycles.contains(&(id, i))) {
-                // class active == 0 && node_active == 0 if
-                // all children are in a cycle
-                model.set_row_upper(row, 0.0);
-                class.nodes.iter().for_each(|&node_active| {
-                    model.set_col_upper(node_active, 0.0);
-                });
-                continue;
             }
 
             for (i, (node, &node_active)) in egraph[id].iter().zip(&class.nodes).enumerate() {
@@ -194,9 +132,6 @@ where
             for (node, &node_active) in class.iter().zip(&vars[&class.id].nodes) {
                 model.set_obj_coeff(node_active, cost_function.node_cost(egraph, class.id, node));
             }
-            // for (_, class) in &vars {
-            //     model.set_obj_coeff(class.active, -1.0);
-            // }
         }
 
         dbg!(max_order);
@@ -205,8 +140,6 @@ where
             egraph,
             model,
             vars,
-            fractional_extract: fractional,
-            cycle: cycles,
         }
     }
 
@@ -227,10 +160,8 @@ where
     pub fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>) {
         let egraph = self.egraph;
 
-        if !self.fractional_extract {
-            for class in self.vars.values() {
-                self.model.set_binary(class.active);
-            }
+        for class in self.vars.values() {
+            self.model.set_binary(class.active);
         }
 
         for root in roots {
@@ -239,11 +170,11 @@ where
         }
 
         let solution = self.model.solve();
-        // log::info!(
-        //     "CBC status {:?}, {:?}",
-        //     solution.raw().status(),
-        //     solution.raw().secondary_status()
-        // );
+        log::info!(
+            "CBC status {:?}, {:?}",
+            solution.raw().status(),
+            solution.raw().secondary_status()
+        );
 
         let mut todo: Vec<Id> = roots.iter().map(|id| self.egraph.find(*id)).collect();
         let mut expr = RecExpr::default();
@@ -255,46 +186,9 @@ where
                 todo.pop();
                 continue;
             }
-            let id = egraph.find(id);
             let v = &self.vars[&id];
-            assert!(
-                solution.col(v.active) > 0.0,
-                "class {} not active: {}",
-                id,
-                solution.col(v.active)
-            );
-            println!("decide for eclass {}", id);
-            let node_idx = {
-                if self.fractional_extract {
-                    let mut rng = rand::thread_rng();
-                    let mut choice = 0;
-                    let total = v.nodes.iter().map(|&x| solution.col(x)).sum::<f64>();
-                    for (i, &node_active) in v.nodes.iter().enumerate() {
-                        println!(
-                            "{} {} (total: {})",
-                            i,
-                            solution.col(node_active) / total,
-                            total
-                        );
-                        if solution.col(node_active) > 0.0 && solution.col(v.nodes[choice]) == 0.0 {
-                            choice = i;
-                        }
-                        if solution.col(node_active) / total > rng.gen_range(0.1..1.0) {
-                            choice = i;
-                            break;
-                        }
-                    }
-                    choice
-                } else {
-                    // v.nodes.iter().for_each(|&n| println!("{}", solution.col(n)));
-                    v.nodes.iter().position(|&n| solution.col(n) > 0.0).unwrap()
-                }
-            };
-            println!(
-                "node_idx {} with sol: {}",
-                node_idx,
-                solution.col(v.nodes[node_idx])
-            );
+            assert!(solution.col(v.active) > 0.0);
+            let node_idx = v.nodes.iter().position(|&n| solution.col(n) > 0.0).unwrap();
             let node = &self.egraph[id].nodes[node_idx];
             if node.all(|child| ids.contains_key(&child)) {
                 let new_id = expr.add(node.clone().map_children(|i| ids[&self.egraph.find(i)]));
@@ -309,253 +203,6 @@ where
 
         assert!(expr.is_dag(), "LpExtract found a cyclic term!: {:?}", expr);
         (expr, root_idxs)
-    }
-}
-
-impl<'a, L: Language, N: Analysis<L>> LpExtractorTrait<L, N> for LpExtractor<'a, L, N> {
-    fn solve(&mut self, root: Id) -> RecExpr<L> {
-        self.solve_multiple(&[root]).0
-    }
-
-    fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>) {
-        self.solve_multiple(roots)
-    }
-
-    fn set_timeout(&mut self, timeout: u64) -> &mut Self {
-        self.timeout(timeout as f64);
-        self
-    }
-}
-
-impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> FractionalExtractor<'a, L, N, CF> {
-    /// Create a fractional extraction problem
-    pub fn new(
-        egraph: &'a EGraph<L, N>,
-        env: &'a rplex::Env,
-        mut cost_function: CF,
-        blacklist_fn: impl Fn(Id, L) -> bool,
-        order_var: bool,
-        fallback: bool,
-    ) -> Self {
-        let max_order = (egraph.total_number_of_nodes() * 10) as f64;
-        let eps = 1.0 / (max_order * 2.0);
-        let mut problem = rplex::Problem::new(env, "fractional_ext").unwrap();
-        let vars = egraph
-            .classes()
-            .map(|cls| {
-                let topo_name = format!("topo_{}", cls.id);
-                let variable_type = if fallback {
-                    rplex::VariableType::Binary
-                } else {
-                    rplex::VariableType::Continuous
-                };
-                let topo_var = problem
-                    .add_variable(var!(0.0 <= topo_name <= max_order -> 0.0 as Continuous))
-                    .unwrap();
-                let nodes = cls
-                    .nodes
-                    .iter()
-                    .enumerate()
-                    .map(|(i, node)| {
-                        let node_active = format!("node_active_{}_{}", cls.id, i);
-                        let node_cost = cost_function.node_cost(egraph, cls.id, node);
-                        let node_active_var = problem
-                            .add_variable(
-                                var!(0.0 <= node_active <= max_order -> node_cost as variable_type),
-                            )
-                            .unwrap();
-                        node_active_var
-                    })
-                    .collect::<Vec<_>>();
-                (
-                    cls.id,
-                    FractionalClassVar {
-                        topo: topo_var,
-                        nodes,
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
-        let mut cycles: HashSet<(Id, usize)> = HashSet::default();
-        find_cycles(egraph, |id, i| {
-            cycles.insert((id, i));
-        });
-
-        // Constraint:
-        // if a node is active, then at least one of the nodes in each child class is active
-        for cls in egraph.classes() {
-            // let mut normalization_cons = rplex::Constraint::new(ConstraintType::GreaterThanEq, 1.0, format!("normalization_{}", cls.id));
-            for (i, node) in cls.nodes.iter().enumerate() {
-                // if !fallback {
-                //     if cycles.contains(&(cls.id, i)) {
-                //         let cons_name = format!("elim_cycle_{}_{}", cls.id, i);
-                //         let node_var_idx = vars[&cls.id].nodes[i];
-                //         problem
-                //             .add_constraint(con!(cons_name: 0.0 = 1.0 node_var_idx))
-                //             .unwrap();
-                //         continue;
-                //     }
-                // }
-                // if blacklist_fn(cls.id, node.clone()) {
-                //     println!("blacklisting {} {:?}", cls.id, node);
-                //     let cons_name = format!("blacklist_{}_{}", cls.id, i);
-                //     let node_var_idx = vars[&cls.id].nodes[i];
-                //     problem
-                //         .add_constraint(con!(cons_name: 0.0 = 1.0 node_var_idx))
-                //         .unwrap();
-                //     continue;
-                // }
-                let node_var_idx = vars[&cls.id].nodes[i];
-                // normalization_cons.add_wvar(WeightedVariable::new_idx(node_var_idx, 1.0));
-                for child in node.children() {
-                    let cons_name = format!("child_active_{}_{}_{}", cls.id, i, child);
-                    // let child = egraph.find(*child);
-                    let child_var = &vars[child];
-                    let mut constraint =
-                        rplex::Constraint::new(ConstraintType::GreaterThanEq, 0.0, cons_name);
-                    constraint.add_wvar(WeightedVariable::new_idx(node_var_idx, -1.0));
-                    for child_node in &child_var.nodes {
-                        constraint.add_wvar(WeightedVariable::new_idx(*child_node, 1.0));
-                    }
-                    problem.add_constraint(constraint).unwrap();
-                    // if order_var {
-                    //     // topo_var(cls) - topo_var(child) - eps + 2 * (1 - node_var) >= 0
-                    //     // ==> topo_var(cls) - topo_var(child) - eps + 2 - 2 * node_var >= 0
-                    //     // ==> topo_var(cls) - topo_var(child) - 2 * node_var >= eps - 2
-                    //     let cls_topo_idx = vars[&cls.id].topo;
-                    //     let child_topo_idx = vars[&child].topo;
-                    //     let cons_name = format!("topo_{}_{}_{}", cls.id, i, child);
-                    //     let lhs = eps - 2.0;
-                    //     let constraint = con!(cons_name: lhs <= 1.0 cls_topo_idx + (-1.0) child_topo_idx + (-2.0) node_var_idx);
-                    //     problem.add_constraint(constraint).unwrap();
-                    // }
-                }
-            }
-            // problem.add_constraint(normalization_cons).unwrap();
-        }
-        problem.set_objective_type(ObjectiveType::Minimize).unwrap();
-        Self {
-            egraph,
-            model: problem,
-            vars,
-            costs: cost_function,
-            fallback,
-        }
-    }
-
-    /// Borrowed and modified from Tensat
-    /// Extract an expression using the LP solution
-    pub fn construct_expr(
-        &mut self,
-        solution: &Solution,
-        eclass: Id,
-        rec_expr: &mut RecExpr<L>,
-        memo: &mut HashMap<Id, Id>,
-        expr_cost: &mut f64,
-    ) -> Id {
-        let id = self.egraph.find(eclass);
-        match memo.get(&id) {
-            Some(id) => *id,
-            None => {
-                // figure out which node to pick
-                let cls = &self.egraph[id];
-                let total: f64 = self.vars[&id]
-                    .nodes
-                    .iter()
-                    .map(|node_idx| match solution.variables[*node_idx] {
-                        VariableValue::Continuous(val) => val,
-                        VariableValue::Binary(val) => {
-                            if val {
-                                1.0
-                            } else {
-                                0.0
-                            }
-                        }
-                        _ => panic!("Unexpected variable value type"),
-                    })
-                    .sum();
-                let choices = self.vars[&id]
-                    .nodes
-                    .iter()
-                    .enumerate()
-                    .map(|(i, node_idx)| {
-                        (
-                            i,
-                            match solution.variables[*node_idx] {
-                                VariableValue::Continuous(val) => val / total,
-                                VariableValue::Binary(val) => (if val { 1.0 } else { 0.0 }) / total,
-                                _ => panic!("Unexpected variable value type"),
-                            },
-                        )
-                    })
-                    .filter(|(_, val)| *val > 0.0)
-                    .collect::<Vec<(usize, f64)>>();
-                let distribution =
-                    WeightedIndex::new(choices.iter().map(|(_, val)| *val as f32)).unwrap();
-                let picked = choices[distribution.sample(&mut rand::thread_rng())].0;
-                // println!("=====Decide for {}\nChoices: {:?}\nChosen: {}", id, choices, picked);
-                // println!("Costs: {:?}", choices.iter().map(|(i, _)| self.costs.node_cost(&self.egraph, id, &self.egraph[id].nodes[*i])).collect::<Vec<f64>>());
-                assert!(choices.len() > 0, "No node picked for class: {}", id);
-                // println!("Picked for eclass {} node {:?}", id, self.egraph[id].nodes[picked as usize]);
-                *expr_cost +=
-                    self.costs
-                        .node_cost(&self.egraph, id, &self.egraph[id].nodes[picked]);
-                let node = &cls.nodes[picked as usize].clone().map_children(|child| {
-                    self.construct_expr(solution, child, rec_expr, memo, expr_cost)
-                });
-                let new_id = rec_expr.add(node.clone());
-                assert!(memo.insert(id, new_id).is_none());
-                new_id
-            }
-        }
-    }
-}
-
-impl<'a, L: Language, N: Analysis<L>, CF: LpCostFunction<L, N>> LpExtractorTrait<L, N>
-    for FractionalExtractor<'a, L, N, CF>
-{
-    fn set_timeout(&mut self, _: u64) -> &mut Self {
-        self
-    }
-
-    fn solve(&mut self, root: Id) -> RecExpr<L> {
-        let root = self.egraph.find(root);
-        let root_var = &self.vars[&root];
-        let mut constraint = rplex::Constraint::new(
-            ConstraintType::GreaterThanEq,
-            if self.fallback {
-                1.0
-            } else {
-                (self.egraph.total_number_of_nodes() * 10) as f64
-            },
-            format!("root_constraint_{}", root),
-        );
-        for node in &root_var.nodes {
-            constraint.add_wvar(WeightedVariable::new_idx(*node, 1.0));
-        }
-        self.model.add_constraint(constraint).unwrap();
-        let solution = self.model.solve_as(if self.fallback {
-            ProblemType::MixedInteger
-        } else {
-            ProblemType::Linear
-        });
-        if let Ok(sol) = solution {
-            let mut rec_expr = RecExpr::default();
-            println!("Objective: {:?}", sol.objective);
-            let mut memo = HashMap::default();
-            let mut expr_cost = 0.0;
-            let _ = self.construct_expr(&sol, root, &mut rec_expr, &mut memo, &mut expr_cost);
-            println!("Cost: {}", expr_cost);
-            rec_expr
-        } else {
-            panic!("Failed to solve the problem: {}", solution.err().unwrap());
-        }
-    }
-
-    fn solve_multiple(&mut self, _: &[Id]) -> (RecExpr<L>, Vec<Id>) {
-        // not capable of extracting multiple for now
-        unimplemented!()
     }
 }
 
@@ -605,7 +252,7 @@ mod tests {
         let f = egraph.add(S::new("f", vec![plus]));
         let g = egraph.add(S::new("g", vec![plus]));
 
-        let mut ext = LpExtractor::new(&egraph, AstSize, false);
+        let mut ext = LpExtractor::new(&egraph, AstSize);
         ext.timeout(10.0); // way too much time
         let (exp, ids) = ext.solve_multiple(&[f, g]);
         println!("{:?}", exp);
